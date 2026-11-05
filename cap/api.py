@@ -51,7 +51,8 @@ class LevelError(Exception):
 class AssemblyAPI:
     """One episode of one task. A policy drives it through these methods only."""
 
-    def __init__(self, env: BatchedAssemblyEnv, rng: np.random.Generator, level: str = "grasp"):
+    def __init__(self, env: BatchedAssemblyEnv, rng: np.random.Generator, level: str = "grasp",
+                 record: bool = False):
         if level not in LEVELS:
             raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
         self.env, self.rng, self.level = env, rng, level
@@ -64,6 +65,7 @@ class AssemblyAPI:
         self.scale = (np.asarray(ecfg.action_scale_joints, float) if len(ecfg.action_scale_joints)
                       else np.full(7, ecfg.action_scale))
         self.trace: list[dict] = []
+        self.frames: list | None = [] if record else None   # per-step states, for offline rendering
         self.done = False
         self.outcome: dict = {}
         # start states may hand over an already-closed gripper (pickup/inhand/partial/near);
@@ -203,6 +205,8 @@ class AssemblyAPI:
     def _step(self, a):
         if self.done:
             raise EpisodeOver()
+        if self.frames is not None:
+            self.frames.append(self.env.state[0].copy())
         _, done, info = self.env.step(a[None, :])
         if bool(done[0]):
             self.done = True
@@ -242,10 +246,10 @@ def sample_starts(task_name, family, n, seed=0):
     return states
 
 
-def run_episode(env, state, policy, level="grasp", seed=0):
+def run_episode(env, state, policy, level="grasp", seed=0, record=False):
     """Run `policy(api)` on one start state. Returns the outcome and the primitive trace."""
     env.set_states([0], np.asarray(state)[None, :], task_ids=[0])
-    api = AssemblyAPI(env, np.random.default_rng(seed), level=level)
+    api = AssemblyAPI(env, np.random.default_rng(seed), level=level, record=record)
     err = None
     try:
         policy(api)
@@ -261,4 +265,7 @@ def run_episode(env, state, policy, level="grasp", seed=0):
                 api.wait(0.2)
         except EpisodeOver:
             pass
-    return dict(**api.outcome, error=err, trace=api.trace)
+    out = dict(**api.outcome, error=err, trace=api.trace)
+    if api.frames is not None:
+        out["frames"] = np.asarray(api.frames)
+    return out
