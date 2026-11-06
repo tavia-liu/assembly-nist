@@ -1,8 +1,9 @@
 """Held-out evaluation of a cap policy: the NIST task-board benchmark in simulation.
 
-Every episode is a full assembly from scratch: the part lies loose on the board at a random pose,
-the gripper is open. Starts are the first `n` (default 100) `loose` states of the task's frozen evaluation bank
-(<data>/banks/<TASK>_eval.npz, disjoint from the training bank the loop debugs on).
+Every episode is a full assembly from scratch: the part lies loose on the board at a random pose, the robot
+is at its home configuration with the gripper open (reset family `board`). Starts are the first `n` (default 100)
+`board` states of the task's frozen evaluation bank (<data>/banks_board/<TASK>_eval.npz, disjoint from the
+training bank the loop debugs on).
 Reported: success rate and completion time of the successful episodes.
 
   PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop/R16_agent     # best round
@@ -22,6 +23,8 @@ import api
 from assembly_policy.sim.resets import FAMILIES
 from assembly_policy.sim.tasks import BANK_DIR
 
+CAP_BANK_DIR = BANK_DIR.parent / "banks_board"   # benchmark-protocol starts (family `board`)
+START_FAMILY = "board"
 DT = 0.04
 
 
@@ -48,9 +51,9 @@ def best_round(run_dir: Path):
 N_EVAL = 100
 
 
-def evaluate(env, policy, task, level, bank_dir=BANK_DIR, n=N_EVAL, verbose=True):
+def evaluate(env, policy, task, level, bank_dir=CAP_BANK_DIR, n=N_EVAL, verbose=True):
     bank = np.load(Path(bank_dir) / f"{task}_eval.npz")
-    idx = np.nonzero(bank["family"] == FAMILIES.index("loose"))[0][:n]
+    idx = np.nonzero(bank["family"] == FAMILIES.index(START_FAMILY))[0][:n]
     rows, t0 = [], time.time()
     for k, i in enumerate(idx):
         try:
@@ -65,7 +68,7 @@ def evaluate(env, policy, task, level, bank_dir=BANK_DIR, n=N_EVAL, verbose=True
             print(f"[eval] {k + 1}/{len(idx)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
     ok = [x for x in rows if x["success"]]
     summary = dict(task=task, horizon_s=env.ecfg.horizon_s,
-                   protocol=f"NIST task board: full assembly from the first {len(idx)} loose starts of the frozen eval bank",
+                   protocol=f"NIST task board: full assembly from the first {len(idx)} {START_FAMILY} starts (part loose on the board, robot at home, gripper open) of the frozen eval bank",
                    n=len(rows), n_ok=len(ok), success_rate=round(100 * len(ok) / max(len(rows), 1), 1),
                    time_mean_s=round(float(np.mean([x["time_s"] for x in ok])), 2) if ok else None,
                    time_median_s=round(float(np.median([x["time_s"] for x in ok])), 2) if ok else None,
@@ -86,8 +89,8 @@ def main():
     ap.add_argument("--policy", default=None, help="a policy.py; default = best round in --run-dir")
     ap.add_argument("--run-dir", default="cap/runs/fixloop/R16_agent")
     ap.add_argument("--level", default="grasp")
-    ap.add_argument("--bank-dir", default=str(BANK_DIR))
-    ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n loose states of the eval bank)")
+    ap.add_argument("--bank-dir", default=str(CAP_BANK_DIR))
+    ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n board states of the eval bank)")
     ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()

@@ -46,10 +46,10 @@ def save_state(st):
 
 
 def debug_starts(st):
-    """First n of a fixed shuffle of the training bank's loose starts, so a larger set contains the smaller."""
+    """First n of a fixed shuffle of the training bank's `board` starts, so a larger set contains the smaller."""
     z = np.load(Path(st["bank_dir"]) / f"{st['task']}_train.npz")
     n = st["schedule"][st["stage"]]
-    idx = np.random.default_rng(0).permutation(np.nonzero(z["family"] == FAMILIES.index("loose"))[0])[:n]
+    idx = np.random.default_rng(0).permutation(np.nonzero(z["family"] == FAMILIES.index("board"))[0])[:n]
     return [dict(id=f"s{j:02d}", bank_idx=int(b), state=z["states"][b]) for j, b in enumerate(idx)]
 
 

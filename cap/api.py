@@ -308,7 +308,7 @@ def make_env(task_name, nthread=1, horizon_s=None):
 
 
 def sample_starts(task_name, family, n, seed=0):
-    """n start states of one reset family ('loose'|'pickup'|'inhand'|'partial'|'near')."""
+    """n start states of one reset family ('loose'|'pickup'|'inhand'|'partial'|'near'|'board')."""
     states, _ = ResetGenerator(task_name, seed=seed).generate(family, n)
     return states
 

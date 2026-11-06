@@ -8,6 +8,8 @@ Families (as described in OmniReset and the AlphaNIST paper, Fig. 4), equal mix:
   3 partial    ObjectPartiallyAssembledEEGrasped: part along its assembly axis at insertion fraction
                alpha in [0, 1.1] (0 = fully seated) + noisy grasp.
   4 near       near-mating: part grasped above its fixture; continuum (level r) of offsets from the entry.
+  5 board      NIST task-board start (not an OmniReset family): part dropped from a random pose and settled,
+               robot at HOME_Q with the fingers open. The full-assembly benchmark protocol starts here.
 Every stored state is settled (low velocities), has the gripper approach within 60 deg of
 down (except loose, as in OmniReset where the EE pose is independent), and contains no
 contact penetration beyond tolerance. States are full MuJoCo physics states.
@@ -25,7 +27,7 @@ from .scene import PhysicsConfig, build_xml, ENV, GRIP, PART, ARM
 from .env import STATE_SPEC
 from .tasks import TASKS, scene_pose
 
-FAMILIES = ("loose", "pickup", "inhand", "partial", "near")
+FAMILIES = ("loose", "pickup", "inhand", "partial", "near", "board")
 PAD_OFFSET = 0.0015  # main finger-pad inner face sits 1.5 mm inboard of the finger joint origin
 
 
@@ -397,6 +399,22 @@ class ResetGenerator:
                     return self._state()
         return None
 
+    def board(self):
+        """NIST task-board start: the part dropped at a random pose and settled; robot at HOME_Q, fingers open."""
+        rc = self.rcfg
+        for _ in range(50):
+            xy = self.rng.uniform(rc.part_xy_lo, rc.part_xy_hi)
+            pos = np.r_[xy, self.rng.uniform(*rc.part_drop_z)]
+            quat = random_quat(self.rng)
+            self._set(HOME_Q, FINGER_OPEN, pos, quat, FINGER_OPEN)
+            if self._max_penetration() > 0:
+                continue
+            if not self._settle(600) or not self._part_in_bounds() or self._robot_contact():
+                continue
+            if self._max_penetration() < rc.penetration_tol:
+                return self._state()
+        return None
+
     def pickup(self, loose_state):
         rc = self.rcfg
         mujoco.mj_setState(self.m, self.d, loose_state, STATE_SPEC)
@@ -646,6 +664,8 @@ class ResetGenerator:
                 s = self.partial()
             elif family == "near":
                 s = self.near()
+            elif family == "board":
+                s = self.board()
             else:
                 raise ValueError(family)
             if s is not None:

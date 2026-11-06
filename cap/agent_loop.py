@@ -163,7 +163,7 @@ def main():
     ap.add_argument("--model", default="claude-opus-5-5[1m]")
     ap.add_argument("--max-turns", type=int, default=800)
     ap.add_argument("--max-resumes", type=int, default=3)
-    ap.add_argument("--bank-dir", default=str(BANK_DIR))
+    ap.add_argument("--bank-dir", default=str(eval_protocol.CAP_BANK_DIR))
     ap.add_argument("--out", default=None)
     ap.add_argument("--no-eval", action="store_true")
     a = ap.parse_args()

@@ -3,6 +3,7 @@ partial, near-mating), a training bank and a disjoint evaluation bank.
 
 python scripts/build_banks.py                              # all 20 tasks, 640 train + 128 eval per (task, family)
 python scripts/build_banks.py --tasks R8+N12 --workers 32  # a subset (e.g. one Slurm array task per task)
+python scripts/build_banks.py --tasks R8 --families board --out data/banks_board   # cap benchmark starts only
 
 Output: <out>/<task>_{train,eval}.npz with arrays states (full MuJoCo physics state), family, level, and a .json
 with generation statistics. Seeds are namespaced by (task, split, family, worker), so train and eval banks never
@@ -42,9 +43,9 @@ def row_hashes(S):
     return {hashlib.sha1(np.round(s[1:], 9).tobytes()).hexdigest() for s in S}
 
 
-def build(task, split, per_family, pool, workers, out, fine):
+def build(task, split, per_family, pool, workers, out, fine, families=FAMILIES):
     jobs = []
-    for fam in FAMILIES:
+    for fam in families:
         per = [per_family // workers + (i < per_family % workers) for i in range(workers)]
         jobs += [(task, split, fam, w, n, fine) for w, n in enumerate(per) if n > 0]
     t0 = time.time()
@@ -59,7 +60,7 @@ def build(task, split, per_family, pool, workers, out, fine):
         overlap = len(row_hashes(S) & row_hashes(np.load(out / f"{task}_train.npz")["states"]))
         assert overlap == 0, f"{overlap} eval states identical to training states"
     np.savez_compressed(out / f"{task}_{split}.npz", states=S, family=F, level=Lv)
-    meta = dict(task=task, split=split, per_family=per_family, families=FAMILIES, fine_families=fine, stats=stats,
+    meta = dict(task=task, split=split, per_family=per_family, families=list(families), fine_families=fine, stats=stats,
                 wall_s=round(time.time() - t0, 1), workers=workers)
     (out / f"{task}_{split}.json").write_text(json.dumps(meta, indent=1))
     print(f"{task} {split}: {len(S)} states in {meta['wall_s']:.0f} s", flush=True)
@@ -72,14 +73,17 @@ def main():
     ap.add_argument("--eval-per-family", type=int, default=128, help="evaluation states per (task, family)")
     ap.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)))
     ap.add_argument("--out", default=str(BANK_DIR))
+    ap.add_argument("--families", default="+".join(FAMILIES), help="reset families to build, '+'-separated")
     ap.add_argument("--fine-families", default=EnvConfig.fine_families,
                     help="families built with the stiff-contact physics used in training")
     a = ap.parse_args()
+    fams = tuple(a.families.split("+"))
+    assert all(f in FAMILIES for f in fams), fams
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     with Pool(a.workers) as pool:
         for task in resolve_tasks(a.tasks):
-            build(task, "train", a.per_family, pool, a.workers, out, a.fine_families)
-            build(task, "eval", a.eval_per_family, pool, a.workers, out, a.fine_families)
+            build(task, "train", a.per_family, pool, a.workers, out, a.fine_families, fams)
+            build(task, "eval", a.eval_per_family, pool, a.workers, out, a.fine_families, fams)
 
 
 if __name__ == "__main__":
