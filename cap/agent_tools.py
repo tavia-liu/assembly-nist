@@ -118,12 +118,12 @@ def compress_trace(trace):
 
 # ---------------------------------------------------------------- rendering (EGL; GPU node)
 def _with_wrist_camera(xml: str) -> str:
-    """Add an eye-in-hand camera to the Franka hand body: mounted 6 cm off the palm centre, looking at a
-    point ~3 cm past the fingertips (camera -z is the viewing direction, +y up = finger closing axis)."""
+    """Add robosuite's eye_in_hand camera to the Franka hand body (the LIBERO / ASPIRE wrist view):
+    5 cm off the palm centre, looking straight along the hand's +z axis toward the fingertips."""
     import xml.etree.ElementTree as ET
     root = ET.fromstring(xml)
     hand = root.find(".//body[@name='hand']")
-    ET.SubElement(hand, "camera", name="wrist", pos="0.06 0 0.0", xyaxes="-0.13 0 -0.06 0 1 0", fovy="70")
+    ET.SubElement(hand, "camera", name="wrist", mode="fixed", pos="0.05 0 0", quat="0 0.707108 0.707108 0", fovy="75")
     return ET.tostring(root, encoding="unicode")
 
 
