@@ -94,17 +94,19 @@ def setup(out: Path, a):
     shutil.copy(a.start, out / "policy.py")
     (out / "bin").mkdir(exist_ok=True)
     py = sys.executable
+    for f in ("agent_tools.py", "record.py"):          # frozen copies: later harness edits must not touch this run
+        shutil.copy(ROOT / "cap" / f, out / "bin" / f)
     for cmd in ("replay", "evaluate"):
         w = out / "bin" / cmd
-        w.write_text(f'#!/bin/bash\nexport PYTHONPATH="{ROOT}:{ROOT}/cap" MUJOCO_GL="${{MUJOCO_GL:-egl}}"\n'
-                     f'exec "{py}" "{ROOT}/cap/agent_tools.py" {cmd} "$@"\n')
+        w.write_text(f'#!/bin/bash\nexport PYTHONPATH="{out / "bin"}:{ROOT}:{ROOT}/cap" MUJOCO_GL="${{MUJOCO_GL:-egl}}"\n'
+                     f'exec "{py}" "{out / "bin" / "agent_tools.py"}" {cmd} "$@"\n')
         w.chmod(0o755)
     schedule = [int(x) for x in a.schedule.split(",")]
     st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), schedule=schedule, stage=0,
               round=0, max_rounds=a.rounds, max_replays_per_start=a.max_replays, replays={})
     (out / "state.json").write_text(json.dumps(st, indent=1))
     import agent_tools                                    # noqa: E402  (same PYTHONPATH)
-    agent_tools.RUN = out
+    agent_tools.RUN = out                                 # setup only; the agent runs the frozen copy in bin/
     agent_tools.write_starts(st)
     env = api.make_env(a.task)
     s0 = agent_tools.debug_starts(st)[0]["state"]
