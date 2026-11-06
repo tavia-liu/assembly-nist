@@ -4,8 +4,8 @@
                              {trace.json, summary.txt, code.py, keyframes/*.png, episode.mp4}
     evaluate                 run policy.py on every debug start (one "round"); writes
                              rounds/rNN/{policy.py, results.json, report.md}; failed starts also get
-                             attempts/rNN/<id>_eval/. Grows the debug set when everything passes,
-                             up to max_starts; passing all of those completes the loop.
+                             attempts/rNN/<id>_eval/. When everything passes the debug set grows to
+                             the next size in state.json's schedule; passing the last size completes the loop.
 
 State lives in state.json; the harness (agent_loop.py) creates it and reads log.jsonl afterwards.
 The simulator's assembly distance is never written anywhere the agent reads.
@@ -48,7 +48,8 @@ def save_state(st):
 def debug_starts(st):
     """First n of a fixed shuffle of the training bank's loose starts, so a larger set contains the smaller."""
     z = np.load(Path(st["bank_dir"]) / f"{st['task']}_train.npz")
-    idx = np.random.default_rng(0).permutation(np.nonzero(z["family"] == FAMILIES.index("loose"))[0])[: st["n_starts"]]
+    n = st["schedule"][st["stage"]]
+    idx = np.random.default_rng(0).permutation(np.nonzero(z["family"] == FAMILIES.index("loose"))[0])[:n]
     return [dict(id=f"s{j:02d}", bank_idx=int(b), state=z["states"][b]) for j, b in enumerate(idx)]
 
 
@@ -256,11 +257,11 @@ def cmd_evaluate(a):
     n_ok, n = sum(r["success"] for r in results), len(results)
     grew = done = False
     if n_ok == n:
-        if st["n_starts"] >= st["max_starts"]:
-            done = True                                   # everything passes at the cap: loop complete
+        if st["stage"] + 1 >= len(st["schedule"]):
+            done = True                                   # everything passes at the last stage: loop complete
             st["round"] = st["max_rounds"]
         else:
-            st["n_starts"] = min(st["n_starts"] + st["grow"], st["max_starts"])
+            st["stage"] += 1
             grew = True
             write_starts(st)
     save_state(st)
@@ -272,8 +273,8 @@ def cmd_evaluate(a):
            " ".join(f"{r['id']}:{'ok' if r['success'] else ('ERR' if r['error'] else ('SAF' if r['safety'] else 'TO'))}"
                     for r in results), ""]
     if grew:
-        rep.append(f"ALL PASSED. The debug set grew to {st['n_starts']} starts; new ids are in starts.json. "
-                   f"The next round scores on all of them.")
+        rep.append(f"ALL PASSED. The debug set grew to {st['schedule'][st['stage']]} starts; new ids are in "
+                   f"starts.json. The next round scores on all of them.")
         rep.append("")
     if done:
         rep.append(f"ALL {n} STARTS PASSED AT THE MAXIMUM SET SIZE. The loop is complete: write findings.md and stop.")

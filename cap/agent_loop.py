@@ -6,9 +6,10 @@ those commands write (trace.json, summary.txt, keyframes/, episode.mp4, rounds/r
 edits policy.py.
 
 Benchmark: the NIST task board in simulation. Every episode is a full assembly from scratch: the
-part lies on the board at a random pose, the gripper is open. The debug set is `starts` such
-starts from the training bank; it grows by `grow` whenever a round passes everything, up to
-`max_starts` (passing all of those ends the loop); the agent has `rounds` evaluate calls.
+part lies on the board at a random pose, the gripper is open. The debug set is drawn from the
+training bank and follows `schedule` (2 -> 5 -> 10 -> 15 -> 20 starts): it moves to the next size
+whenever a round passes everything; passing the last size ends the loop. The agent has `rounds`
+evaluate calls.
 Afterwards the harness scores the best round on the held-out eval bank (eval_protocol.evaluate:
 success rate and completion time on 128 unseen starts).
 
@@ -61,8 +62,8 @@ replay <id>    run policy.py on one debug start (ids in starts.json). Writes att
                trace.json, summary.txt, keyframes/ (png after each primitive: left global camera,
                right wrist camera), episode.mp4. Max {max_replays} per start per round.
 evaluate       run policy.py on all debug starts = one round. Writes rounds/rNN/report.md and
-               attempts/rNN/<id>_eval/ for failures. You have {rounds} calls; when all starts
-               pass, the set grows by {grow}, up to {max_starts}; passing all of those ends the loop.
+               attempts/rNN/<id>_eval/ for failures. You have {rounds} calls. When all starts
+               pass, the set grows ({schedule}); passing all {last} ends the loop.
 
 The simulator's distance-to-goal is never shown. Shell is limited to these two commands and
 read-only inspection; edit policy.py with the Edit tool and keep it importable.
@@ -98,9 +99,9 @@ def setup(out: Path, a):
         w.write_text(f'#!/bin/bash\nexport PYTHONPATH="{ROOT}:{ROOT}/cap" MUJOCO_GL="${{MUJOCO_GL:-egl}}"\n'
                      f'exec "{py}" "{ROOT}/cap/agent_tools.py" {cmd} "$@"\n')
         w.chmod(0o755)
-    st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), n_starts=a.starts, grow=a.grow,
-              max_starts=a.max_starts, round=0, max_rounds=a.rounds,
-              max_replays_per_start=a.max_replays, replays={})
+    schedule = [int(x) for x in a.schedule.split(",")]
+    st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), schedule=schedule, stage=0,
+              round=0, max_rounds=a.rounds, max_replays_per_start=a.max_replays, replays={})
     (out / "state.json").write_text(json.dumps(st, indent=1))
     import agent_tools                                    # noqa: E402  (same PYTHONPATH)
     agent_tools.RUN = out
@@ -109,8 +110,8 @@ def setup(out: Path, a):
     s0 = agent_tools.debug_starts(st)[0]["state"]
     env.set_states([0], s0[None, :], task_ids=[0])
     const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
-    brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const),
-                         rounds=a.rounds, grow=a.grow, max_starts=a.max_starts, max_replays=a.max_replays)
+    brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const), rounds=a.rounds,
+                         schedule=" -> ".join(map(str, schedule)), last=schedule[-1], max_replays=a.max_replays)
     (out / "BRIEF.md").write_text(brief)
     return brief
 
@@ -143,10 +144,9 @@ def rounds_done(out: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="R16")
-    ap.add_argument("--starts", type=int, default=5, help="debug starts at the beginning")
-    ap.add_argument("--grow", type=int, default=5, help="added whenever a round passes every start")
-    ap.add_argument("--max-starts", type=int, default=100, help="passing all of these ends the loop")
-    ap.add_argument("--rounds", type=int, default=10)
+    ap.add_argument("--schedule", default="2,5,10,15,20",
+                    help="debug-set sizes; the set moves to the next size when a round passes every start")
+    ap.add_argument("--rounds", type=int, default=25)
     ap.add_argument("--max-replays", type=int, default=3)
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--start", default=str(ROOT / "cap/naive_r16.py"))
