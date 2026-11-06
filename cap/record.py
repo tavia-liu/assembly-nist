@@ -64,6 +64,7 @@ def main():
                     help="fix_loop log.jsonl: render the debug episodes of --turn from the training bank instead of "
                          "generator starts (policy defaults to that turn's vNN.py)")
     ap.add_argument("--turn", type=int, default=None)
+    ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
     a = ap.parse_args()
     starts, labels = None, None
     if a.from_log:
@@ -80,7 +81,7 @@ def main():
     mod, attr = a.policy.split(":")
     policy = getattr(importlib.import_module(mod), attr)
 
-    env = api.make_env(a.task)
+    env = api.make_env(a.task, horizon_s=a.horizon)
     if starts is None:
         starts = api.sample_starts(a.task, a.family, a.n, seed=0)
         labels = [a.family] * len(starts)
