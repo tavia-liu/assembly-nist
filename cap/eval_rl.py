@@ -3,7 +3,8 @@
 Every episode is a full assembly from a `board` start (part loose on the board, robot at home, gripper open):
 the first --n (default 100) board states of the task's frozen evaluation bank in <data>/banks_board, one episode
 per start, success + completion time. Actions are sampled (as in the AlphaNIST evaluation) unless --deterministic.
-The first --record episodes of every task are rendered to <out>/<TASK>.mp4.
+Output per task: <out>/<TASK>/summary.json, episodes.json and videos/epNNN_<ok|fail>.mp4 for the first --record
+episodes (default: all of them).
 
   PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_rl.py --tasks R8 --out cap/runs/rl_eval/e8192_it12500
   PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_rl.py --tasks all20 --out cap/runs/rl_eval/e8192_it12500
@@ -75,35 +76,32 @@ def run_task(ckpt, task, cfg, bank_dir, n, record_n, deterministic, device, seed
     return summary, rows, (np.stack(frames) if record_n else None), done_at[:record_n], success[:record_n]
 
 
-def render(task, frames, done_at, success, out, width=480, height=360):
-    """Grid video of the recorded episodes, same style as cap/record.py."""
+def render(task, frames, done_at, success, vdir, width=480, height=360):
+    """One mp4 per recorded episode (same camera/labels as cap/record.py)."""
     T, n, _ = frames.shape
+    vdir.mkdir(parents=True, exist_ok=True)
     vm = mujoco.MjModel.from_xml_string(build_xml(task, visual=True))
     vd = mujoco.MjData(vm)
     rend = mujoco.Renderer(vm, height, width)
-    cams = [camera_for(vm, vd, frames[0, i], task) for i in range(n)]
-    last = [int(done_at[i] + 1) if done_at[i] >= 0 else T - 1 for i in range(n)]
-    cols = int(np.ceil(np.sqrt(n * 4 / 3))); rows = int(np.ceil(n / cols))
     dt = 0.04
-    video = []
-    for f in range(max(last) + 1 + int(HOLD_S * FPS)):
-        tiles = []
-        for i in range(n):
-            k = min(f, last[i])
+    for i in range(n):
+        last = int(done_at[i] + 1) if done_at[i] >= 0 else T - 1
+        cam = camera_for(vm, vd, frames[0, i], task)
+        ok = bool(success[i])
+        video = []
+        for f in range(last + 1 + int(HOLD_S * FPS)):
+            k = min(f, last)
             mujoco.mj_setState(vm, vd, frames[k, i], STATE_SPEC)
             mujoco.mj_forward(vm, vd)
-            rend.update_scene(vd, cams[i])
+            rend.update_scene(vd, cam)
             img = Image.fromarray(rend.render()).convert("RGBA")
-            ok = bool(success[i])
-            tiles.append(label(img, [f"{task} | RL | ep{i}", f"t={k * dt:4.1f}s",
-                                     ("SUCCESS" if ok else "FAIL") if k == last[i] else ""],
+            video.append(label(img, [f"{task} | RL | seed {i}", f"t={k * dt:4.1f}s",
+                                     ("SUCCESS" if ok else "FAIL") if k == last else ""],
                                [(235, 235, 235, 255), (190, 200, 215, 255),
                                 (120, 255, 120, 255) if ok else (255, 150, 120, 255)]))
-        while len(tiles) < rows * cols:
-            tiles.append(np.zeros_like(tiles[0]))
-        video.append(np.concatenate([np.concatenate(tiles[r * cols:(r + 1) * cols], 1) for r in range(rows)], 0))
-    imageio.mimwrite(out, video, fps=FPS, codec="libx264", quality=7, macro_block_size=8)
-    print(f"wrote {out} ({len(video)} frames, {n} episodes)", flush=True)
+        imageio.mimwrite(vdir / f"ep{i:03d}_{'ok' if ok else 'fail'}.mp4", video, fps=FPS, codec="libx264",
+                         quality=7, macro_block_size=8)
+    print(f"wrote {n} videos to {vdir}", flush=True)
 
 
 def main():
@@ -113,7 +111,7 @@ def main():
     ap.add_argument("--bank-dir", default=str(CAP_BANK_DIR))
     ap.add_argument("--n", type=int, default=N_EVAL)
     ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
-    ap.add_argument("--record", type=int, default=8, help="episodes per task rendered to <out>/<TASK>.mp4")
+    ap.add_argument("--record", type=int, default=N_EVAL, help="episodes per task rendered to <out>/<TASK>/videos/")
     ap.add_argument("--deterministic", action="store_true", help="mean actions (default: sampled, as in the paper)")
     ap.add_argument("--nthread", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 8)))
     ap.add_argument("--device", default="cpu")
@@ -127,11 +125,13 @@ def main():
     for task in resolve_tasks(a.tasks):
         summary, rows, frames, done_at, success = run_task(a.ckpt, task, cfg, a.bank_dir, a.n, a.record,
                                                            a.deterministic, a.device)
-        (out / f"{task}.json").write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
+        tdir = out / task; tdir.mkdir(exist_ok=True)
+        (tdir / "summary.json").write_text(json.dumps(summary, indent=1))
+        (tdir / "episodes.json").write_text(json.dumps(rows, indent=1))
         all_summ[task] = summary
         if frames is not None:
             try:
-                render(task, frames, done_at, success, out / f"{task}.mp4")
+                render(task, frames, done_at, success, tdir / "videos")
             except Exception as e:                       # rendering is optional; the numbers are not
                 print(f"[warn] no video for {task}: {type(e).__name__}: {e}", flush=True)
     if len(all_summ) > 1:
