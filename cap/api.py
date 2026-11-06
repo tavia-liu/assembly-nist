@@ -74,6 +74,7 @@ class AssemblyAPI:
         # env.set_states latches grip_cmd from the finger opening, so mirror it or the first
         # servo step would re-open the fingers and drop the part
         self.grip_open = bool(env.grip_cmd[0] > 0)
+        self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
 
     # ------------------------------------------------------------------ enforcement
     def _require(self, name):
@@ -130,6 +131,7 @@ class AssemblyAPI:
             joints=s[self.env.sq].copy(), joint_vel=s[self.env.sqd].copy(),
             gripper_width=float(s[self.env.sf].sum()),
             gripper_open_cmd=self.grip_open,
+            gripper_target_width=round(float(self.env.grip_cmd[0]) * 2, 4),
             tcp_jacobian=J,
             joint_torque_ext=tau_ext, tcp_wrench_ext=wrench,
         )
@@ -166,10 +168,9 @@ class AssemblyAPI:
 
     def step(self, action):
         """One 25 Hz control step. action[0:7] are relative joint targets in units of
-        action_scale (clipped to [-1,1]); action[7] > 0.5 opens the gripper, < -0.5 closes it,
-        in between holds the last command. The gripper has only two targets, fully open (0.08 m)
-        or fully closed; there is no aperture control. Returns observe(). Raises EpisodeOver
-        when the episode ends."""
+        action_scale (clipped to [-1,1]); action[7] > 0.5 commands fully open (0.08 m), < -0.5
+        fully closed, in between keeps the current gripper target (set_gripper(width=) sets an
+        intermediate one). Returns observe(). Raises EpisodeOver when the episode ends."""
         self._require("step")
         return self._step(np.asarray(action, float).reshape(8))
 
@@ -206,28 +207,38 @@ class AssemblyAPI:
             if np.abs(err).max() < tol:
                 break
             a[:7] = np.clip(gain * err / self.scale, -1.0, 1.0)
-            a[7] = 1.0 if self.grip_open else -1.0
+            a[7] = self._a7
             self._step(a)
         ok = bool(np.abs(q_target - self.env.state[0, self.env.sq]).max() < tol)
         if _rec:
             self._rec("move_to_joints", ok=ok, err=self._joint_err(q_target))
         return ok
 
-    def set_gripper(self, open_: bool, hold_s=0.5):
-        """Open or close the gripper, holding the arm still while the fingers act."""
+    def set_gripper(self, open_: bool | None = None, hold_s=0.5, width: float | None = None):
+        """Command the gripper and hold the arm still while the fingers act. Either open_=True/False
+        (fully open 0.08 m / fully closed, force-limited) or width= a target opening in metres
+        (0 .. 0.08), as a Franka Hand's move(width). The target persists until the next command."""
         self._require("set_gripper")
-        self.grip_open = bool(open_)
+        if width is not None:
+            per_finger = float(np.clip(width / 2.0, self.env.ecfg.grip_close, 0.04))
+            self.env.grip_cmd[0] = per_finger
+            self.grip_open = per_finger > 0.03
+            self._a7 = 0.0                              # hold: action[7] in the deadband keeps grip_cmd
+        else:
+            self.grip_open = bool(open_)
+            self._a7 = 1.0 if self.grip_open else -1.0
         a = np.zeros(8)
-        a[7] = 1.0 if self.grip_open else -1.0
+        a[7] = self._a7
         for _ in range(max(1, int(hold_s / self.env.ecfg.control_dt))):
             self._step(a)
-        self._rec("set_gripper", open=self.grip_open, width=round(float(self.env.state[0, self.env.sf].sum()), 4))
+        self._rec("set_gripper", open=self.grip_open, target=round(float(self.env.grip_cmd[0]) * 2, 4),
+                  width=round(float(self.env.state[0, self.env.sf].sum()), 4))
 
     def wait(self, seconds=0.2):
         """Hold the current joint and gripper targets."""
         self._require("wait")
         a = np.zeros(8)
-        a[7] = 1.0 if self.grip_open else -1.0
+        a[7] = self._a7
         for _ in range(max(1, int(seconds / self.env.ecfg.control_dt))):
             self._step(a)
 

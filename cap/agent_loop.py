@@ -94,7 +94,7 @@ def setup(out: Path, a):
     shutil.copy(a.start, out / "policy.py")
     (out / "bin").mkdir(exist_ok=True)
     py = sys.executable
-    for f in ("agent_tools.py", "record.py"):          # frozen copies: later harness edits must not touch this run
+    for f in ("api.py", "agent_tools.py", "record.py"):  # frozen copies: later harness edits must not touch this run
         shutil.copy(ROOT / "cap" / f, out / "bin" / f)
     for cmd in ("replay", "evaluate"):
         w = out / "bin" / cmd
