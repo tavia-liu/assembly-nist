@@ -9,15 +9,17 @@ the code around it. Actions are sampled (as in the AlphaNIST evaluation) unless 
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
 
+import assembly_policy
 from assembly_policy.evaluate import TorchPolicy
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CKPT = ROOT / "checkpoints/e8192_it12500.pt"
+ROOT = Path(assembly_policy.__file__).resolve().parents[1]          # the repo, also when this file is a frozen copy
+DEFAULT_CKPT = Path(os.environ.get("CAP_RL_CKPT", ROOT / "checkpoints/e8192_it12500.pt"))
 
 
 class RLSkill:
