@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 from pathlib import Path
 
 import imageio.v2 as imageio
@@ -20,7 +21,7 @@ from PIL import Image, ImageDraw
 import api
 from assembly_policy.sim.env import STATE_SPEC, EnvConfig
 from assembly_policy.sim.scene import build_xml
-from assembly_policy.sim.tasks import TASKS, scene_pose
+from assembly_policy.sim.tasks import BANK_DIR, TASKS, scene_pose
 
 FPS = 25
 HOLD_S = 1.0          # freeze on the last frame this long
@@ -59,13 +60,30 @@ def main():
     ap.add_argument("--out", default="cap/runs/episodes.mp4")
     ap.add_argument("--width", type=int, default=480)
     ap.add_argument("--height", type=int, default=360)
+    ap.add_argument("--from-log", default=None,
+                    help="fix_loop log.jsonl: render the debug episodes of --turn from the training bank instead of "
+                         "generator starts (policy defaults to that turn's vNN.py)")
+    ap.add_argument("--turn", type=int, default=None)
     a = ap.parse_args()
+    starts, labels = None, None
+    if a.from_log:
+        recs = [json.loads(l) for l in Path(a.from_log).read_text().splitlines()]
+        rec = next(r for r in recs if r.get("turn") == a.turn and "episodes" in r and not r.get("eval"))
+        bank = np.load(Path(BANK_DIR) / f"{a.task}_train.npz")["states"]
+        starts = [bank[e["bank_idx"]] for e in rec["episodes"]]
+        labels = [e["family"] for e in rec["episodes"]]
+        a.policy = f"v{a.turn:02d}:policy"
+        a.n = len(starts)
+        if a.n > 12 and a.width == 480:
+            a.width, a.height = 320, 240
 
     mod, attr = a.policy.split(":")
     policy = getattr(importlib.import_module(mod), attr)
 
     env = api.make_env(a.task)
-    starts = api.sample_starts(a.task, a.family, a.n, seed=0)
+    if starts is None:
+        starts = api.sample_starts(a.task, a.family, a.n, seed=0)
+        labels = [a.family] * len(starts)
     eps = []
     for i, s in enumerate(starts):
         r = api.run_episode(env, s, policy, level=a.level, seed=i, record=True)
@@ -92,7 +110,7 @@ def main():
             rend.update_scene(vd, cams[i])
             img = Image.fromarray(rend.render()).convert("RGBA")
             ok = e["success"]
-            tiles.append(label(img, [f"{a.task} | {a.family} | ep{i}",
+            tiles.append(label(img, [f"{a.task} | {labels[i]} | ep{i}",
                                      f"t={k*dt:4.1f}s  d_asm={e['d_asm']*1000:5.1f}mm",
                                      ("SUCCESS" if ok else "FAIL") if k == len(e["frames"]) - 1 else ""],
                                [(235, 235, 235, 255), (190, 200, 215, 255),
