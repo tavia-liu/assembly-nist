@@ -2,7 +2,7 @@
 
 The agent (Claude Code, `claude -p` with Read/Edit/Write and a shell allow-list) works inside
 <run>/ where it owns policy.py and may run `evaluate`. It reads the artifacts that command
-writes (rounds/rNN/report.md; per failed start trace.json, summary.txt, keyframes/, episode.mp4) and
+writes (rounds/rNN/report.md; per seed trace.json, summary.txt, keyframes/, episode.mp4) and
 edits policy.py.
 
 Benchmark: the NIST task board in simulation. Every episode is a full assembly from scratch: the
@@ -58,10 +58,10 @@ trace.
 
 # Command
 
-evaluate       run policy.py on all debug starts (ids in starts.json) = one round. Writes
-               rounds/rNN/report.md and, for every failed start, attempts/rNN/<id>/ with
-               trace.json, summary.txt, keyframes/ (png after each primitive: left global
-               camera, right wrist camera) and episode.mp4. You have {rounds} calls. When all
+evaluate       run policy.py on all debug seeds (ids in starts.json) = one round. Writes
+               rounds/rNN/report.md and, for every seed, attempts/rNN/<id>/ with trace.json,
+               summary.txt, keyframes/ (png after each primitive: left global camera, right
+               wrist camera) and episode.mp4. You have {rounds} calls. When all
                starts pass, the set grows ({schedule}); passing all {last} ends the loop.
 
 The simulator's distance-to-goal is never shown. Shell is limited to `evaluate` and read-only

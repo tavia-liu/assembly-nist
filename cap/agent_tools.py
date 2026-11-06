@@ -3,8 +3,8 @@
     replay <start-id>        run policy.py on one debug start; writes attempts/rNN/<id>_<k>/
                              {trace.json, summary.txt, code.py, keyframes/*.png, episode.mp4}
     evaluate                 run policy.py on every debug start (one "round"); writes
-                             rounds/rNN/{policy.py, results.json, report.md}; failed starts also get
-                             attempts/rNN/<id>_eval/. When everything passes the debug set grows to
+                             rounds/rNN/{policy.py, results.json, report.md} and attempts/rNN/<id>/
+                             for every seed. When everything passes the debug set grows to
                              the next size in state.json's schedule; passing the last size completes the loop.
 
 State lives in state.json; the harness (agent_loop.py) creates it and reads log.jsonl afterwards.
@@ -249,7 +249,7 @@ def cmd_evaluate(a):
                    safety=bool(r.get("safety", False)), timeout=bool(r.get("timeout", False)),
                    steps=int(r.get("steps", 0)), error=r.get("error"), d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2),
                    trace=r.get("trace", []))
-        if not rec["success"] and not import_error:
+        if not import_error:                              # evidence for every seed, successes included
             write_attempt(RUN / "attempts" / f"r{rnd:02d}" / s["id"], s, r, vis, video=True)
         results.append(rec)
         print(f"  {s['id']:12s} {outcome_line(r)}", flush=True)
@@ -279,6 +279,8 @@ def cmd_evaluate(a):
         rep.append(f"ALL {n} STARTS PASSED AT THE MAXIMUM SET SIZE. The loop is complete: write findings.md and stop.")
         rep.append("")
     failed = [r for r in results if not r["success"]]
+    rep.append(f"Artifacts of every seed (trace.json, summary.txt, keyframes/, episode.mp4): attempts/r{rnd:02d}/<id>/")
+    rep.append("")
     if failed:
         rep.append("## Failed starts")
         for r in failed:
