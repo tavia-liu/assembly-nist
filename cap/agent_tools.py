@@ -57,6 +57,81 @@ def write_starts(st):
     (RUN / "starts.json").write_text(json.dumps([s["id"] for s in debug_starts(st)]))
 
 
+STAGED_POLICY = '''# Auto-assembled from plan.md + stages/NN_<name>.py -- edit the stage files, not this file.
+import traceback
+
+import numpy as np
+
+import api as _api
+
+STAGES = {stages!r}   # (name, file, source) in plan order
+
+
+class StageFailed(Exception):
+    pass
+
+
+def policy(api):
+    ns = dict(api=api, np=np)
+    cur = [None]
+
+    def stage_done(ok, evidence=""):
+        api._rec("stage_done", stage=cur[0], ok=bool(ok), evidence=str(evidence)[:200])
+        print(f"[STAGE {{cur[0]}}] {{'PASS' if ok else 'FAIL'}} {{evidence}}", flush=True)
+        if not ok:
+            raise StageFailed(cur[0])
+
+    ns["stage_done"] = stage_done
+    try:
+        for name, fname, src in STAGES:
+            cur[0] = name
+            print(f"=== STAGE {{name}} ({{fname}}) ===", flush=True)
+            try:
+                exec(compile(src, fname, "exec"), ns)
+            except (StageFailed, _api.EpisodeOver, _api.LevelError):
+                raise
+            except Exception as e:
+                traceback.print_exc()
+                api._rec("stage_done", stage=name, ok=False, evidence=f"exception {{type(e).__name__}}: {{e}}"[:200])
+                print(f"[STAGE {{name}}] FAIL exception {{type(e).__name__}}: {{e}}", flush=True)
+                raise StageFailed(name)
+    except StageFailed:
+        return                        # the episode goes on without the policy (later stages skipped)
+'''
+
+
+def stage_files():
+    d = RUN / "stages"
+    files = sorted(f for f in d.glob("[0-9][0-9]_*.py")) if d.is_dir() else []
+    return [(f.stem.split("_", 1)[1], f"stages/{f.name}", f.read_text()) for f in files]
+
+
+def build_policy():
+    """policy.py from the stage files (staged runs). Returns the stage names."""
+    stages = stage_files()
+    if not stages:
+        sys.exit("Refused: no stage files. Write plan.md and stages/NN_<name>.py first (see BRIEF.md), then evaluate.")
+    (RUN / "policy.py").write_text(STAGED_POLICY.format(stages=stages))
+    return [s[0] for s in stages]
+
+
+def stage_verdicts(trace, names):
+    """{stage: 'ok' | 'FAIL: evidence' | '-'} from the stage_done trace entries (- = never reached)."""
+    v = {n: "-" for n in names}
+    for e in trace:
+        if e.get("call") == "stage_done" and e.get("stage") in v:
+            v[e["stage"]] = "ok" if e.get("ok") else "FAIL: " + str(e.get("evidence", ""))
+    return v
+
+
+def focus_stage(results, names):
+    """Earliest stage that fails or is not reached on a failed seed; the last stage if all pass yet the seed fails."""
+    for n in names:
+        if any(r["stages"].get(n, "-") != "ok" for r in results if not r["success"]):
+            return n
+    return names[-1] if names and any(not r["success"] for r in results) else None
+
+
 def load_policy(path: Path):
     spec = importlib.util.spec_from_file_location("cap_policy_" + hashlib.sha1(path.read_bytes()).hexdigest()[:8], path)
     mod = importlib.util.module_from_spec(spec)
@@ -95,7 +170,9 @@ def compress_trace(trace):
             lines.append(prev + (f"  x{n}" if n > 1 else ""))
 
     for e in trace:
-        if e["call"] == "set_gripper":
+        if e["call"] == "stage_done":
+            core = f"[STAGE {e.get('stage')}] {'PASS' if e.get('ok') else 'FAIL'} {e.get('evidence', '')}"
+        elif e["call"] == "set_gripper":
             core = f"set_gripper({'open' if e.get('open') else 'close'}) -> width {e.get('width')}"
         elif e["call"] in ("move_to", "move_to_joints"):
             core = f"{e['call']} -> {'ok' if e.get('ok') else 'FAIL:' + str(e.get('why', ''))}" + \
@@ -232,11 +309,16 @@ def cmd_evaluate(a):
             sys.exit(f"Refused: write {diag.relative_to(RUN)} first (failed seeds {', '.join(failed_prev)}): per seed what "
                      f"happened step by step, the root cause with the trace numbers or keyframes that prove it, and the "
                      f"one change you will make. Then run evaluate again.")
+    names = build_policy() if st.get("staged") else []
     st["round"] += 1
     rnd = st["round"]
     rdir = RUN / "rounds" / f"r{rnd:02d}"
     rdir.mkdir(parents=True, exist_ok=True)
     shutil.copy(RUN / "policy.py", rdir / "policy.py")
+    if names:
+        shutil.copytree(RUN / "stages", rdir / "stages", dirs_exist_ok=True)
+        if (RUN / "plan.md").exists():
+            shutil.copy(RUN / "plan.md", rdir / "plan.md")
     starts = debug_starts(st)
     vis = make_vis(st["task"])
     env = api.make_env(st["task"], horizon_s=st.get("horizon_s"))
@@ -256,7 +338,7 @@ def cmd_evaluate(a):
         rec = dict(id=s["id"], bank_idx=s["bank_idx"], success=bool(r["success"]),
                    safety=bool(r.get("safety", False)), timeout=bool(r.get("timeout", False)),
                    steps=int(r.get("steps", 0)), error=r.get("error"), d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2),
-                   trace=r.get("trace", []))
+                   stages=stage_verdicts(r.get("trace", []), names), trace=r.get("trace", []))
         if not import_error:                              # evidence for every seed, successes included
             write_attempt(RUN / "attempts" / f"r{rnd:02d}" / s["id"], s, r, vis, video=True)
         results.append(rec)
@@ -287,6 +369,18 @@ def cmd_evaluate(a):
         rep.append(f"ALL {n} STARTS PASSED AT THE MAXIMUM SET SIZE. The loop is complete: write findings.md and stop.")
         rep.append("")
     failed = [r for r in results if not r["success"]]
+    if names:
+        rep.append("## Stage verdicts (from your stage_done calls; - = not reached)")
+        for r in results:
+            rep.append(f"{r['id']}: " + "  ".join(f"{n}:{r['stages'][n]}" for n in names)
+                       + ("" if r["success"] else f"   -> {'ERROR' if r['error'] else ('SAFETY' if r['safety'] else 'TIMEOUT')}"))
+        focus = focus_stage(results, names)
+        if focus:
+            rep.append("")
+            rep.append(f"Focus stage: {focus}" + (" (every stage passed on the failed seeds, yet the part is not seated: the last "
+                                                  "stage or its verifier is wrong)" if all(r["stages"].get(focus) == "ok" for r in failed) else ""))
+            rep.append("Start the diagnosis there; if the evidence shows an earlier stage is the real cause, revise that one instead.")
+        rep.append("")
     rep.append(f"Artifacts of every seed (trace.json, summary.txt, keyframes/, episode.mp4): attempts/r{rnd:02d}/<id>/")
     rep.append("")
     if failed:

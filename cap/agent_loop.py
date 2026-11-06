@@ -56,7 +56,7 @@ scored on held-out starts you never see, by success rate and completion time. Wr
 that decides from `api.observe()`; never special-case a start or hard-code numbers taken from a
 trace.
 
-# Command
+{structure}# Command
 
 evaluate       run policy.py on all debug seeds (ids in starts.json) = one round. Writes
                rounds/rNN/report.md and, for every seed, attempts/rNN/<id>/ with trace.json,
@@ -79,14 +79,29 @@ Constants: {const}
 
 # Procedure
 
-1. `evaluate`.
+1. {step1}
 2. Diagnose before touching code. For every failed seed read summary.txt, trace.json and the
-   keyframes (at least the last three and final.png). Write rounds/rNN/diagnosis.md with, per
+   keyframes (at least the last three and final.png){focus}. Write rounds/rNN/diagnosis.md with, per
    seed: what happened step by step, the root cause and the numbers or images that prove it,
    and the one change you will make. `evaluate` refuses the next round until this file exists.
-3. Make that change in policy.py, `evaluate` again.
+3. Make that change in {edit}, `evaluate` again.
 4. Repeat until `evaluate` refuses for good, then write findings.md: causes, fixes with
    evidence, what still fails, best round.
+"""
+
+
+STRUCTURE = """\
+# Program structure
+
+Write the policy as stages, like a plan you can check step by step. plan.md: one line per stage, in
+order -- name, the state it must produce, how it verifies that from api.observe(). stages/NN_<name>.py
+(NN = 01, 02, ...): the code of one stage. All stage files run in order in one shared namespace with
+`api` and `stage_done` defined, so helpers and variables from an earlier stage are visible to later ones.
+Every stage ends with stage_done(ok, evidence): FAIL stops the policy (later stages are skipped, the
+episode times out) and the report shows every seed's verdict per stage and names the focus stage.
+`evaluate` assembles policy.py from the stage files; never edit policy.py. Keep it to a few stages
+(e.g. grasp, lift, align, insert) and keep verifiers honest: they see only what the API reports.
+
 """
 
 
@@ -94,7 +109,12 @@ def setup(out: Path, a):
     out.mkdir(parents=True, exist_ok=True)
     (out / "attempts").mkdir(exist_ok=True)
     (out / "rounds").mkdir(exist_ok=True)
-    shutil.copy(a.start, out / "policy.py")
+    if a.staged:
+        (out / "stages").mkdir(exist_ok=True)
+        (out / "plan.md").write_text("# Plan\n\n(one line per stage, in order: name -- state it produces -- how it is verified)\n")
+        (out / "policy.py").write_text("# assembled by `evaluate` from plan.md + stages/; do not edit\ndef policy(api):\n    pass\n")
+    else:
+        shutil.copy(a.start, out / "policy.py")
     (out / "bin").mkdir(exist_ok=True)
     py = sys.executable
     for f in ("api.py", "agent_tools.py", "record.py"):  # frozen copies: later harness edits must not touch this run
@@ -111,7 +131,7 @@ def setup(out: Path, a):
         matcher="Read|Edit|Write|MultiEdit|Glob|Grep|Bash",
         hooks=[dict(type="command", command=f"python3 {out / 'bin' / 'guard.py'}")])])), indent=1))
     st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), schedule=schedule, stage=0,
-              round=0, max_rounds=a.rounds, horizon_s=a.horizon)
+              round=0, max_rounds=a.rounds, horizon_s=a.horizon, staged=bool(a.staged))
     (out / "state.json").write_text(json.dumps(st, indent=1))
     import agent_tools                                    # noqa: E402  (same PYTHONPATH)
     agent_tools.RUN = out                                 # setup only; the agent runs the frozen copy in bin/
@@ -121,7 +141,11 @@ def setup(out: Path, a):
     env.set_states([0], s0[None, :], task_ids=[0])
     const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
     brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const), rounds=a.rounds,
-                         schedule=" -> ".join(map(str, schedule)), last=schedule[-1])
+                         schedule=" -> ".join(map(str, schedule)), last=schedule[-1],
+                         structure=STRUCTURE if a.staged else "",
+                         step1="Write plan.md and the stage files, then `evaluate`." if a.staged else "`evaluate`.",
+                         focus=", starting from the focus stage the report names" if a.staged else "",
+                         edit="the stage file" if a.staged else "policy.py")
     (out / "BRIEF.md").write_text(brief)
     return brief
 
@@ -166,6 +190,9 @@ def main():
     ap.add_argument("--bank-dir", default=str(eval_protocol.CAP_BANK_DIR))
     ap.add_argument("--out", default=None)
     ap.add_argument("--no-eval", action="store_true")
+    ap.add_argument("--flat", dest="staged", action="store_false",
+                    help="old single-file policy.py mode (default: staged plan.md + stages/NN_<name>.py)")
+    ap.add_argument("--setup-only", action="store_true", help="create the sandbox and stop (no agent)")
     a = ap.parse_args()
     out = Path(a.out or ROOT / f"cap/runs/fixloop/{a.task}_agent").resolve()
     if (out / "state.json").exists():
@@ -175,6 +202,8 @@ def main():
     (out / "run.json").write_text(json.dumps(dict(vars(a), session=session,
                                                   started=time.strftime("%Y-%m-%d %H:%M:%S")), indent=1))
     print(f"[run] {out}  session {session}", flush=True)
+    if a.setup_only:
+        return
 
     run_agent(out, brief, a, session, resume=False)
     for i in range(a.max_resumes):
