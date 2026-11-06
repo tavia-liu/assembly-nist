@@ -48,8 +48,8 @@ BRIEF = """\
 Write `policy(api)` in policy.py: a 7-DoF Franka arm with a parallel-jaw gripper must pick up one
 part ({task}) lying on the board and bring it to its target pose on the fixture, in a physics
 simulator. An episode ends with SUCCESS when the part reaches the target pose (both keypoints
-within 1 mm), TIMEOUT after {horizon:g} s, SAFETY if a joint exceeds its velocity limit, or FAILURE
-on an exception in your code.
+within 1 mm), TIMEOUT after 15 s, SAFETY if a joint exceeds its velocity limit, or FAILURE on an
+exception in your code.
 
 Each episode starts with the part at a random pose on the board and the gripper open. You are
 scored on held-out starts you never see, by success rate and completion time. Write one program
@@ -65,7 +65,8 @@ evaluate       run policy.py on all debug seeds (ids in starts.json) = one round
                starts pass, the set grows ({schedule}); passing all {last} ends the loop.
 
 The simulator's distance-to-goal is never shown. Shell is limited to `evaluate` and read-only
-inspection; edit policy.py with the Edit tool and keep it importable.
+inspection; edit policy.py with the Edit tool and keep it importable. Everything outside this
+directory is off limits and blocked: the robot knows only what the API and these artifacts tell it.
 
 # API
 
@@ -78,10 +79,14 @@ Constants: {const}
 
 # Procedure
 
-1. `evaluate`. Read the report; for failures read summary.txt, trace.json and keyframes.
-2. Group failures by cause, fix policy.py, `evaluate` again.
-3. Repeat until `evaluate` refuses, then write findings.md: causes, fixes with evidence, what
-   still fails, best round.
+1. `evaluate`.
+2. Diagnose before touching code. For every failed seed read summary.txt, trace.json and the
+   keyframes (at least the last three and final.png). Write rounds/rNN/diagnosis.md with, per
+   seed: what happened step by step, the root cause and the numbers or images that prove it,
+   and the one change you will make. `evaluate` refuses the next round until this file exists.
+3. Make that change in policy.py, `evaluate` again.
+4. Repeat until `evaluate` refuses for good, then write findings.md: causes, fixes with
+   evidence, what still fails, best round.
 """
 
 
@@ -100,17 +105,22 @@ def setup(out: Path, a):
                      f'exec "{py}" "{out / "bin" / "agent_tools.py"}" {cmd} "$@"\n')
         w.chmod(0o755)
     schedule = [int(x) for x in a.schedule.split(",")]
+    shutil.copy(ROOT / "cap" / "guard.py", out / "bin" / "guard.py")
+    (out / ".claude").mkdir(exist_ok=True)
+    (out / ".claude" / "settings.json").write_text(json.dumps(dict(hooks=dict(PreToolUse=[dict(
+        matcher="Read|Edit|Write|MultiEdit|Glob|Grep|Bash",
+        hooks=[dict(type="command", command=f"python3 {out / 'bin' / 'guard.py'}")])])), indent=1))
     st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), schedule=schedule, stage=0,
-              round=0, max_rounds=a.rounds, horizon_s=a.horizon)
+              round=0, max_rounds=a.rounds)
     (out / "state.json").write_text(json.dumps(st, indent=1))
     import agent_tools                                    # noqa: E402  (same PYTHONPATH)
     agent_tools.RUN = out                                 # setup only; the agent runs the frozen copy in bin/
     agent_tools.write_starts(st)
-    env = api.make_env(a.task, horizon_s=a.horizon)
+    env = api.make_env(a.task)
     s0 = agent_tools.debug_starts(st)[0]["state"]
     env.set_states([0], s0[None, :], task_ids=[0])
     const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
-    brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const), rounds=a.rounds, horizon=a.horizon,
+    brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const), rounds=a.rounds,
                          schedule=" -> ".join(map(str, schedule)), last=schedule[-1])
     (out / "BRIEF.md").write_text(brief)
     return brief
@@ -147,7 +157,6 @@ def main():
     ap.add_argument("--schedule", default="2,5,10,15,20",
                     help="debug-set sizes; the set moves to the next size when a round passes every start")
     ap.add_argument("--rounds", type=int, default=25)
-    ap.add_argument("--horizon", type=float, default=60.0, help="episode time limit in seconds (benchmark default 15)")
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--start", default=str(ROOT / "cap/naive_r16.py"))
     ap.add_argument("--model", default="claude-opus-5-5[1m]")
@@ -188,7 +197,7 @@ def main():
         return
     print(f"[eval] held-out NIST protocol on {path.relative_to(out)}", flush=True)
     policy = eval_protocol.load_policy(path)
-    env = api.make_env(a.task, horizon_s=a.horizon)
+    env = api.make_env(a.task)
     summary, rows = eval_protocol.evaluate(env, policy, a.task, a.level, a.bank_dir)
     summary["policy"] = str(path)
     (out / f"eval_r{rnd:02d}.json").write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))

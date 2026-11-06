@@ -212,7 +212,7 @@ def cmd_replay(a):
         policy = load_policy(RUN / "policy.py")
     except Exception:
         sys.exit("policy.py failed to import:\n" + traceback.format_exc()[-1500:])
-    env = api.make_env(st["task"], horizon_s=st.get("horizon_s"))
+    env = api.make_env(st["task"])
     r = run_one(env, starts[a.start_id], policy, st["level"], seed=used)
     adir = RUN / "attempts" / f"r{st['round']:02d}" / f"{a.start_id}_{used + 1}"
     summ = write_attempt(adir, starts[a.start_id], r, make_vis(st["task"]), video=True)
@@ -224,6 +224,14 @@ def cmd_evaluate(a):
     st = load_state()
     if st["round"] >= st["max_rounds"]:
         sys.exit(f"evaluate budget exhausted ({st['max_rounds']} rounds). Write findings.md and stop.")
+    if st["round"] >= 1 and st.get("require_diagnosis", True):
+        prev = RUN / "rounds" / f"r{st['round']:02d}"
+        diag = prev / "diagnosis.md"
+        failed_prev = [r["id"] for r in json.loads((prev / "results.json").read_text()) if not r["success"]]
+        if failed_prev and (not diag.exists() or len(diag.read_text().strip()) < 400):
+            sys.exit(f"Refused: write {diag.relative_to(RUN)} first (failed seeds {', '.join(failed_prev)}): per seed what "
+                     f"happened step by step, the root cause with the trace numbers or keyframes that prove it, and the "
+                     f"one change you will make. Then run evaluate again.")
     st["round"] += 1
     rnd = st["round"]
     rdir = RUN / "rounds" / f"r{rnd:02d}"
@@ -231,7 +239,7 @@ def cmd_evaluate(a):
     shutil.copy(RUN / "policy.py", rdir / "policy.py")
     starts = debug_starts(st)
     vis = make_vis(st["task"])
-    env = api.make_env(st["task"], horizon_s=st.get("horizon_s"))
+    env = api.make_env(st["task"])
     try:
         policy = load_policy(RUN / "policy.py")
         import_error = None
@@ -268,8 +276,7 @@ def cmd_evaluate(a):
     # report for the agent (no d_asm)
     ok_t = [r["steps"] * 0.04 for r in results if r["success"]]
     rep = [f"# Round {rnd:02d} of {st['max_rounds']}: {n_ok}/{n} starts succeeded"
-           + (f", mean time {np.mean(ok_t):.1f} s" if ok_t else ""),
-           f"Episode time limit: {env.ecfg.horizon_s:g} s", "",
+           + (f", mean time {np.mean(ok_t):.1f} s" if ok_t else ""), "",
            " ".join(f"{r['id']}:{'ok' if r['success'] else ('ERR' if r['error'] else ('SAF' if r['safety'] else 'TO'))}"
                     for r in results), ""]
     if grew:
