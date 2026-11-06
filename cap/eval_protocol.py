@@ -4,8 +4,8 @@ Within a seed the 32 start states cycle through the five reset families
 (loose, pickup, inhand[=transport], partial, near), so every family gets 6-7 starts per seed
 and 32 per task. Sampler seeds 1..5 are disjoint from the fix loop's debug seed 0.
 
-  PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop_R16_near     # best version by log.jsonl
-  PYTHONPATH=.:cap python cap/eval_protocol.py --policy cap/runs/fixloop_R16_near/v02.py
+  PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop/R16_near     # best version by log.jsonl
+  PYTHONPATH=.:cap python cap/eval_protocol.py --policy cap/runs/fixloop/R16_near/v02.py
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="R16")
     ap.add_argument("--policy", default=None, help="path to a vNN.py; default = best in --run-dir")
-    ap.add_argument("--run-dir", default="cap/runs/fixloop_R16_near")
+    ap.add_argument("--run-dir", default="cap/runs/fixloop/R16_near")
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--trials", type=int, default=32)

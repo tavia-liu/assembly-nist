@@ -6,9 +6,9 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=00:30:00
-#SBATCH --output=cap/runs/render-%j.log
+#SBATCH --output=cap/runs/slurm/%x-%j.log
 set -euo pipefail
 cd /engrfs/project/chongjie/buzhao/autodeco/assembly-nist
 export MUJOCO_GL=egl PYTHONPATH=.:cap
 .venv/bin/python cap/record.py --task "${TASK:-R16}" --family "${FAMILY:-near}" \
-    --n "${N:-6}" --out "${OUT:-cap/runs/R16_near.mp4}"
+    --n "${N:-6}" --out "${OUT:-cap/runs/oracle/oracle_r16_R16_near.mp4}"

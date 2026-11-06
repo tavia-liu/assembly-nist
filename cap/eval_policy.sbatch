@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=20G
 #SBATCH --time=00:30:00
-#SBATCH --output=cap/runs/eval-%j.log
+#SBATCH --output=cap/runs/slurm/%x-%j.log
 set -euo pipefail
 cd /engrfs/project/chongjie/buzhao/autodeco/assembly-nist
 export PYTHONPATH=.:cap

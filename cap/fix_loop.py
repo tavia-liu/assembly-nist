@@ -139,7 +139,7 @@ def main():
     ap.add_argument("--model", default="claude-opus-5-5[1m]")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    out = Path(a.out or f"cap/runs/fixloop_{a.task}_{a.family}")
+    out = Path(a.out or f"cap/runs/fixloop/{a.task}_{a.family}")
     out.mkdir(parents=True, exist_ok=True)
     log = open(out / "log.jsonl", "a")
 
