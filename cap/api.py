@@ -67,6 +67,7 @@ class AssemblyAPI:
                       else np.full(7, ecfg.action_scale))
         self.trace: list[dict] = []
         self.frames: list | None = [] if record else None   # per-step states, for offline rendering
+        self.key_states: list = []                           # state at every recorded primitive call (keyframes)
         self.done = False
         self.outcome: dict = {}
         # start states may hand over an already-closed gripper (pickup/inhand/partial/near);
@@ -81,7 +82,17 @@ class AssemblyAPI:
             raise LevelError(f"{name}() needs level {need!r}; this policy declared {self.level!r}")
 
     def _rec(self, call, **kw):
-        self.trace.append(dict(t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2), call=call, **kw))
+        """Append a trace entry: the primitive, its result, and what the robot could see afterwards."""
+        s = self.env.state[0]
+        fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
+        _, wrench = self._external_load(self._jacobian())
+        e = dict(t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2), call=call, **kw,
+                 tcp=np.round(fk["tcp_p"][0], 4).tolist(), part=np.round(s[self.env.sp[:3]], 4).tolist(),
+                 grip=round(float(s[self.env.sf].sum()), 4), wrench=np.round(wrench, 1).tolist())
+        if self.frames is not None:
+            self.key_states.append(s.copy())
+            e["key"] = len(self.key_states) - 1
+        self.trace.append(e)
 
     # ------------------------------------------------------------------ raw
     def constants(self):
@@ -307,4 +318,5 @@ def run_episode(env, state, policy, level="grasp", seed=0, record=False):
     out = dict(**api.outcome, error=err, trace=api.trace)
     if api.frames is not None:
         out["frames"] = np.asarray(api.frames)
+        out["keyframes"] = np.asarray(api.key_states) if api.key_states else np.zeros((0, api.frames and len(api.frames[0]) or 0))
     return out
