@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 import mujoco
 
-from assembly_policy.sim.env import BatchedAssemblyEnv, EnvConfig
+from assembly_policy.sim.env import STATE_SPEC, BatchedAssemblyEnv, EnvConfig
 from assembly_policy.sim.resets import ResetGenerator, any_grasp
 from assembly_policy.sim.robot import mat_to_quat, quat_mul, quat_to_mat, solve_ik
 from assembly_policy.sim.tasks import TASKS, scene_pose
@@ -59,6 +59,7 @@ class AssemblyAPI:
         self.tm = env.models[0]
         self.m = self.tm.model
         self._ik_d = mujoco.MjData(self.m)
+        self._obs_d = mujoco.MjData(self.m)     # scratch for the contact solver in observe()
         self.task = TASKS[env.task_names[0]]
         self._goal_pos, self._goal_quat = scene_pose(self.task.part_scene)
         ecfg = env.ecfg
@@ -94,25 +95,63 @@ class AssemblyAPI:
                     task=self.task.name, family=self.task.family)
 
     def observe(self):
-        """Full privileged state of the episode.
+        """State of the episode, limited to what a real robot cell reports.
 
         pos are metres in the world frame, quat are (w,x,y,z). `goal_*` is the pose the part
-        must reach; success is d_asm < success_threshold_m. `tcp` is the fingertip centre,
-        its +z is the approach direction (palm -> fingertips) and +y the finger closing axis.
+        must reach (success_threshold_m on both of its keypoints). `tcp` is the fingertip
+        centre, its +z is the approach direction (palm -> fingertips) and +y the finger closing
+        axis. `joint_torque_ext` [7] and `tcp_wrench_ext` [6: force xyz, torque xyz, world
+        frame] are the external load the environment exerts on the arm, as libfranka's
+        tau_ext_hat / O_F_ext_hat_K. The simulator's assembly distance is NOT exposed: no
+        robot can measure it.
         """
         self._require("observe")
         s = self.env.state[0]
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
+        J = self._jacobian()
+        tau_ext, wrench = self._external_load(J)
         return dict(
             t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2),
             time_left=round(float(self.env.horizon - self.env.t[0]) * self.env.ecfg.control_dt, 2),
             tcp_pos=fk["tcp_p"][0].copy(), tcp_quat=mat_to_quat(fk["tcp_R"][:1])[0],
             part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy(),
             goal_pos=self._goal_pos.copy(), goal_quat=self._goal_quat.copy(),
-            joints=s[self.env.sq].copy(), gripper_width=float(s[self.env.sf].sum()),
+            joints=s[self.env.sq].copy(), joint_vel=s[self.env.sqd].copy(),
+            gripper_width=float(s[self.env.sf].sum()),
             gripper_open_cmd=self.grip_open,
-            d_asm=float(self.env.assembly_distance()[0]),
+            tcp_jacobian=J,
+            joint_torque_ext=tau_ext, tcp_wrench_ext=wrench,
         )
+
+    def _external_load(self, J):
+        """External joint torques from the constraint solver and the TCP wrench they imply.
+
+        mj_forward on the current full state recomputes contacts without stepping;
+        qfrc_constraint is the generalized force the environment (contacts, joint limits)
+        applies to the arm. A real Franka estimates the same quantities from its joint torque
+        sensors every cycle, so exposing them models a robot that can feel a jam.
+        """
+        d = self._obs_d
+        mujoco.mj_setState(self.m, d, self.env.state[0], STATE_SPEC)
+        mujoco.mj_forward(self.m, d)
+        tau_ext = d.qfrc_constraint[self.env.idx.arm_dof].copy()
+        wrench = np.linalg.pinv(J.T) @ tau_ext          # tau = J^T f  ->  f (6,)
+        return tau_ext, wrench
+
+    def _jacobian(self):
+        """6x7 TCP Jacobian at the current joints (rows: linear xyz, then angular xyz).
+
+        A real Franka controller has this -- libfranka publishes it every cycle -- so
+        withholding it would model a robot that does not know its own kinematics.
+        """
+        d = self._ik_d
+        d.qpos[self.env.idx.arm_qpos] = self.env.state[0, self.env.sq]
+        mujoco.mj_kinematics(self.m, d)
+        mujoco.mj_comPos(self.m, d)
+        jp = np.zeros((3, self.m.nv))
+        jr = np.zeros((3, self.m.nv))
+        mujoco.mj_jacSite(self.m, d, jp, jr, self.env.idx.tcp_site)
+        return np.vstack([jp[:, self.env.idx.arm_dof], jr[:, self.env.idx.arm_dof]])
 
     def step(self, action):
         """One 25 Hz control step. action[0:7] are relative joint targets in units of
