@@ -105,6 +105,7 @@ class MultiPartEnv(BatchedAssemblyEnv):
         self.sq = 1 + self.idx.arm_qpos
         self.sf = 1 + self.idx.finger_qpos
         self.sqd = 1 + self.nq + self.idx.arm_dof
+        self.scoring = True          # False: step() never reports success (code finishing / recovery moves)
         self.set_active(self.tasks[0])
 
     # ------------------------------------------------------------- parts
@@ -118,6 +119,8 @@ class MultiPartEnv(BatchedAssemblyEnv):
         self.sp, self.spd = self.part_slices(t)
 
     def assembly_distance(self, t=None):
+        if t is None and not self.scoring:
+            return np.full(self.N, np.inf)
         t = t or self.active
         g, sp = self.models[0].goal[t], self.part_slices(t)[0]
         pp, pq = self.state[:, sp[:3]], self.state[:, sp[3:7]]

@@ -107,27 +107,51 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
             t = next(u for u in random_order if u in remaining)
         remaining.remove(t)
         env.set_active(t)
-        ap = api.AssemblyAPI(env, rng, level="grasp", record=True)
         t0 = int(env.t[0])
-        err = None
-        try:
-            if i > 0:
-                policy_mod.recover(ap)
-            policy_mod.policy(ap)
-        except api.EpisodeOver:
-            pass
-        except Exception as e:                        # a policy bug is a result, not a crash
-            err = f"{type(e).__name__}: {e}"
-        frames += ap.frames + [env.state[0].copy()]
-        out_ = ap.outcome if ap.done else dict(success=False, safety=False, timeout=False)
+        err, tries = None, 0
+        while True:                                   # a safety stop (velocity limit) ends the attempt, not the part
+            ap = api.AssemblyAPI(env, rng, level="grasp", record=True)
+            try:
+                if i > 0 or tries > 0:
+                    policy_mod.recover(ap)
+                policy_mod.policy(ap)
+            except api.EpisodeOver:
+                pass
+            except Exception as e:                    # a policy bug is a result, not a crash
+                err = f"{type(e).__name__}: {e}"
+            frames += ap.frames + [env.state[0].copy()]
+            out_ = ap.outcome if ap.done else dict(success=False, safety=False, timeout=False)
+            tries += 1
+            if out_.get("safety") and not out_.get("success") and tries < a.retries + 1:
+                print(f"seed {seed} part {i + 1} {t}: safety stop after {(int(env.t[0]) - t0) * dt:.1f} s, retry {tries}", flush=True)
+                continue
+            break
         d_mm = round(float(env.assembly_distance(t)[0]) * 1000, 2)
+        if out_["success"] and hasattr(policy_mod, "finish") and not out_.get("timeout"):
+            env.scoring = False                       # the part is seated: press, release, lift (no re-trigger)
+            ap2 = api.AssemblyAPI(env, rng, level="grasp", record=True)
+            try:
+                policy_mod.finish(ap2)
+            except api.EpisodeOver:
+                pass
+            except Exception as e:
+                err = f"finish: {type(e).__name__}: {e}"
+            env.scoring = True
+            frames += ap2.frames + [env.state[0].copy()]
+            if ap2.done and ap2.outcome.get("timeout"):
+                out_["timeout"] = True
         secs = round((int(env.t[0]) - t0) * dt, 2)
+        after = {u: round(float(env.assembly_distance(u)[0]) * 1000, 2) for u in tasks}
         results.append(dict(stage=i, task=t, success=bool(out_["success"]), safety=bool(out_.get("safety", False)),
-                            seconds=secs, d_asm_mm=d_mm, error=err))
+                            tries=tries, seconds=secs, d_asm_mm=d_mm, d_asm_after_release_mm=after[t],
+                            after_stage_mm=after, error=err))
         stages.append((len(frames) - 1, f"{NAMES.get(t, t)}: {'assembled in %.1f s' % secs if out_['success'] else 'not assembled (%.0f s)' % secs}",
                        bool(out_["success"])))
+        knocked = [s_["task"] for s_ in results[:-1]        # seated after its own stage, displaced during this one
+                   if s_["after_stage_mm"][s_["task"]] < 1.0 and after[s_["task"]] >= 1.0]
         print(f"seed {seed} part {i + 1}/{len(tasks)} {t}: {'assembled' if out_['success'] else 'NOT assembled'} "
-              f"in {secs:.1f} s  d_asm {d_mm} mm{'  ' + err if err else ''}", flush=True)
+              f"in {secs:.1f} s  d_asm {d_mm} -> {after[t]} mm after release"
+              f"{'  knocked out: ' + ','.join(knocked) if knocked else ''}{'  ' + err if err else ''}", flush=True)
         if out_.get("timeout"):
             timed_out = True
             break
@@ -155,12 +179,14 @@ def main():
     ap.add_argument("--n-seeds", type=int, default=1)
     ap.add_argument("--video-seeds", type=int, default=1)
     ap.add_argument("--per-part-s", type=float, default=40.0)
+    ap.add_argument("--retries", type=int, default=2, help="extra attempts on a part after a safety stop")
     ap.add_argument("--bank-dir", default=str(CAP_BANK_DIR))
     ap.add_argument("--width", type=int, default=1280); ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--tag", default="", help="suffix of the default output folder")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     tasks = resolve_tasks(PRESETS.get(a.tasks, a.tasks))
-    out = Path(a.out or ROOT / "cap/runs/board" / f"{a.policy}_{a.order}_{'+'.join(tasks)}")
+    out = Path(a.out or ROOT / "cap/runs/board" / f"{a.policy}_{a.order}_{'+'.join(tasks)}{a.tag}")
     out.mkdir(parents=True, exist_ok=True)
     policy_mod = importlib.import_module(a.policy)
     e1 = api.make_env(tasks[0]); sp_single = e1.sp.copy(); e1.close()
