@@ -268,7 +268,8 @@ def cmd_evaluate(a):
     # report for the agent (no d_asm)
     ok_t = [r["steps"] * 0.04 for r in results if r["success"]]
     rep = [f"# Round {rnd:02d} of {st['max_rounds']}: {n_ok}/{n} starts succeeded"
-           + (f", mean time {np.mean(ok_t):.1f} s" if ok_t else ""), "",
+           + (f", mean time {np.mean(ok_t):.1f} s" if ok_t else ""),
+           f"Episode time limit: {env.ecfg.horizon_s:g} s", "",
            " ".join(f"{r['id']}:{'ok' if r['success'] else ('ERR' if r['error'] else ('SAF' if r['safety'] else 'TO'))}"
                     for r in results), ""]
     if grew:
