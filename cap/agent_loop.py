@@ -158,7 +158,7 @@ def main():
                     help="debug-set sizes; the set moves to the next size when a round passes every start")
     ap.add_argument("--rounds", type=int, default=25)
     ap.add_argument("--level", default="grasp")
-    ap.add_argument("--horizon", type=float, default=60.0, help="episode time limit in seconds")
+    ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
     ap.add_argument("--start", default=str(ROOT / "cap/naive_r16.py"))
     ap.add_argument("--model", default="claude-opus-5-5[1m]")
     ap.add_argument("--max-turns", type=int, default=800)

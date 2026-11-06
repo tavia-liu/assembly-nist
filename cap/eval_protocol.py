@@ -88,7 +88,7 @@ def main():
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--bank-dir", default=str(BANK_DIR))
     ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n loose states of the eval bank)")
-    ap.add_argument("--horizon", type=float, default=60.0, help="episode time limit in seconds")
+    ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.policy:
