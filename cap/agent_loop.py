@@ -11,7 +11,7 @@ training bank and follows `schedule` (2 -> 5 -> 10 -> 15 -> 20 starts): it moves
 whenever a round passes everything; passing the last size ends the loop. The agent has `rounds`
 evaluate calls.
 Afterwards the harness scores the best round on the held-out eval bank (eval_protocol.evaluate:
-success rate and completion time on 128 unseen starts).
+success rate and completion time on 100 unseen starts).
 
   PYTHONPATH=.:cap MUJOCO_GL=egl python cap/agent_loop.py --task R16 --rounds 10
 """

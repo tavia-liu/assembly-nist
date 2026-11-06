@@ -1,8 +1,8 @@
 """Held-out evaluation of a cap policy: the NIST task-board benchmark in simulation.
 
 Every episode is a full assembly from scratch: the part lies loose on the board at a random pose,
-the gripper is open. Starts are the `loose` states of the task's frozen evaluation bank
-(<data>/banks/<TASK>_eval.npz, 128 per task, disjoint from the training bank the loop debugs on).
+the gripper is open. Starts are the first `n` (default 100) `loose` states of the task's frozen evaluation bank
+(<data>/banks/<TASK>_eval.npz, disjoint from the training bank the loop debugs on).
 Reported: success rate and completion time of the successful episodes.
 
   PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop/R16_agent     # best round
@@ -45,9 +45,12 @@ def best_round(run_dir: Path):
     return best[1], run_dir / "rounds" / f"r{best[1]:02d}" / "policy.py"
 
 
-def evaluate(env, policy, task, level, bank_dir=BANK_DIR, verbose=True):
+N_EVAL = 100
+
+
+def evaluate(env, policy, task, level, bank_dir=BANK_DIR, n=N_EVAL, verbose=True):
     bank = np.load(Path(bank_dir) / f"{task}_eval.npz")
-    idx = np.nonzero(bank["family"] == FAMILIES.index("loose"))[0]
+    idx = np.nonzero(bank["family"] == FAMILIES.index("loose"))[0][:n]
     rows, t0 = [], time.time()
     for k, i in enumerate(idx):
         try:
@@ -61,7 +64,7 @@ def evaluate(env, policy, task, level, bank_dir=BANK_DIR, verbose=True):
         if verbose and (k + 1) % 32 == 0:
             print(f"[eval] {k + 1}/{len(idx)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
     ok = [x for x in rows if x["success"]]
-    summary = dict(task=task, protocol="NIST task board: full assembly from the loose starts of the frozen eval bank",
+    summary = dict(task=task, protocol=f"NIST task board: full assembly from the first {len(idx)} loose starts of the frozen eval bank",
                    n=len(rows), n_ok=len(ok), success_rate=round(100 * len(ok) / max(len(rows), 1), 1),
                    time_mean_s=round(float(np.mean([x["time_s"] for x in ok])), 2) if ok else None,
                    time_median_s=round(float(np.median([x["time_s"] for x in ok])), 2) if ok else None,
@@ -83,6 +86,7 @@ def main():
     ap.add_argument("--run-dir", default="cap/runs/fixloop/R16_agent")
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--bank-dir", default=str(BANK_DIR))
+    ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n loose states of the eval bank)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.policy:
@@ -93,7 +97,7 @@ def main():
     out = Path(a.out or Path(a.run_dir) / f"eval_{name}.json")
     env = api.make_env(a.task)
     print(f"policy {path}  task {a.task}", flush=True)
-    summary, rows = evaluate(env, policy, a.task, a.level, a.bank_dir)
+    summary, rows = evaluate(env, policy, a.task, a.level, a.bank_dir, n=a.n)
     summary["policy"] = str(path)
     out.write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
     print_summary(summary, name)
