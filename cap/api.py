@@ -299,8 +299,12 @@ def spec(level="grasp"):
 
 
 # ---------------------------------------------------------------------- episode plumbing
-def make_env(task_name, nthread=1):
-    return BatchedAssemblyEnv([task_name], [0], EnvConfig(nthread=nthread))
+def make_env(task_name, nthread=1, horizon_s=None):
+    """One-env simulator for `task_name`. horizon_s overrides the benchmark's episode limit (default 15 s)."""
+    kw = dict(nthread=nthread)
+    if horizon_s is not None:
+        kw["horizon_s"] = float(horizon_s)
+    return BatchedAssemblyEnv([task_name], [0], EnvConfig(**kw))
 
 
 def sample_starts(task_name, family, n, seed=0):

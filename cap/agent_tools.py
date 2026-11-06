@@ -212,7 +212,7 @@ def cmd_replay(a):
         policy = load_policy(RUN / "policy.py")
     except Exception:
         sys.exit("policy.py failed to import:\n" + traceback.format_exc()[-1500:])
-    env = api.make_env(st["task"])
+    env = api.make_env(st["task"], horizon_s=st.get("horizon_s"))
     r = run_one(env, starts[a.start_id], policy, st["level"], seed=used)
     adir = RUN / "attempts" / f"r{st['round']:02d}" / f"{a.start_id}_{used + 1}"
     summ = write_attempt(adir, starts[a.start_id], r, make_vis(st["task"]), video=True)
@@ -231,7 +231,7 @@ def cmd_evaluate(a):
     shutil.copy(RUN / "policy.py", rdir / "policy.py")
     starts = debug_starts(st)
     vis = make_vis(st["task"])
-    env = api.make_env(st["task"])
+    env = api.make_env(st["task"], horizon_s=st.get("horizon_s"))
     try:
         policy = load_policy(RUN / "policy.py")
         import_error = None

@@ -64,7 +64,8 @@ def evaluate(env, policy, task, level, bank_dir=BANK_DIR, n=N_EVAL, verbose=True
         if verbose and (k + 1) % 32 == 0:
             print(f"[eval] {k + 1}/{len(idx)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
     ok = [x for x in rows if x["success"]]
-    summary = dict(task=task, protocol=f"NIST task board: full assembly from the first {len(idx)} loose starts of the frozen eval bank",
+    summary = dict(task=task, horizon_s=env.ecfg.horizon_s,
+                   protocol=f"NIST task board: full assembly from the first {len(idx)} loose starts of the frozen eval bank",
                    n=len(rows), n_ok=len(ok), success_rate=round(100 * len(ok) / max(len(rows), 1), 1),
                    time_mean_s=round(float(np.mean([x["time_s"] for x in ok])), 2) if ok else None,
                    time_median_s=round(float(np.median([x["time_s"] for x in ok])), 2) if ok else None,
@@ -87,6 +88,7 @@ def main():
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--bank-dir", default=str(BANK_DIR))
     ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n loose states of the eval bank)")
+    ap.add_argument("--horizon", type=float, default=60.0, help="episode time limit in seconds")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.policy:
@@ -95,8 +97,8 @@ def main():
         rnd, path = best_round(Path(a.run_dir)); name = f"r{rnd:02d}"
     policy = load_policy(path)
     out = Path(a.out or Path(a.run_dir) / f"eval_{name}.json")
-    env = api.make_env(a.task)
-    print(f"policy {path}  task {a.task}", flush=True)
+    env = api.make_env(a.task, horizon_s=a.horizon)
+    print(f"policy {path}  task {a.task}  horizon {a.horizon:g} s", flush=True)
     summary, rows = evaluate(env, policy, a.task, a.level, a.bank_dir, n=a.n)
     summary["policy"] = str(path)
     out.write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
