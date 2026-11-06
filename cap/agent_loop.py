@@ -1,13 +1,16 @@
-"""Code-as-policy fix loop, ASPIRE-style: one coding agent, one session, a sandbox with two commands.
+"""Code-as-policy fix loop: one coding agent, one session, a sandbox with two commands.
 
 The agent (Claude Code, `claude -p` with Read/Edit/Write and a shell allow-list) works inside
-<run>/ where it owns policy.py and may run `replay <start-id>` and `evaluate`. It reads the
-artifacts those commands write (trace.json, summary.txt, keyframes/, episode.mp4,
-rounds/rNN/report.md) and edits policy.py. The seed rhythm is fixed by the harness: the debug set
-starts at `per_family` training-bank starts for each of the five reset families, grows by `grow`
-per family whenever a round passes everything, and the agent has exactly `rounds` evaluate calls.
-Afterwards the harness scores the best round with the official protocol
-(eval_protocol.official_eval).
+<run>/ where it owns policy.py and may run `replay <id>` and `evaluate`. It reads the artifacts
+those commands write (trace.json, summary.txt, keyframes/, episode.mp4, rounds/rNN/report.md) and
+edits policy.py.
+
+Benchmark: the NIST task board in simulation. Every episode is a full assembly from scratch: the
+part lies on the board at a random pose, the gripper is open. The debug set is `starts` such
+starts from the training bank; it grows by `grow` whenever a round passes everything, up to
+`max_starts` (passing all of those ends the loop); the agent has `rounds` evaluate calls.
+Afterwards the harness scores the best round on the held-out eval bank (eval_protocol.evaluate:
+success rate and completion time on 128 unseen starts).
 
   PYTHONPATH=.:cap MUJOCO_GL=egl python cap/agent_loop.py --task R16 --rounds 10
 """
@@ -39,96 +42,47 @@ ALLOWED_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep",
                  "Bash(python3 -c:*)", "Bash(python3 -m py_compile:*)", "Bash(python3 -m json.tool:*)"]
 
 BRIEF = """\
-# Fix loop: write one robust assembly program
+# Task
 
-You are debugging the control program for a 7-DoF Franka Panda arm with a parallel-jaw gripper in
-a physics simulator. One movable part ({task}) must be brought to a fixed target pose on a
-fixture. An episode ends with SUCCESS the moment the part reaches the target pose (both of its
-keypoints within 1 mm), with TIMEOUT after 15 s of simulated time, or with SAFETY if a joint
-exceeds its velocity limit. An exception in your code ends the episode as a failure.
+Write `policy(api)` in policy.py: a 7-DoF Franka arm with a parallel-jaw gripper must pick up one
+part ({task}) lying on the board and bring it to its target pose on the fixture, in a physics
+simulator. An episode ends with SUCCESS when the part reaches the target pose (both keypoints
+within 1 mm), TIMEOUT after 15 s, SAFETY if a joint exceeds its velocity limit, or FAILURE on an
+exception in your code.
 
-## The start state varies. Your code must be robust to it.
+Each episode starts with the part at a random pose on the board and the gripper open. You are
+scored on held-out starts you never see, by success rate and completion time. Write one program
+that decides from `api.observe()`; never special-case a start or hard-code numbers taken from a
+trace.
 
-Every episode begins from a different, randomly drawn start state: the part may be lying loose,
-about to be grasped, already in hand away from the fixture, partly engaged, or held at the
-fixture mouth, and within each of those the poses, the grasp offset in the fingers and the
-residual misalignment all differ. The part can also shift in the fingers during transport. You
-are scored on START STATES YOU HAVE NEVER SEEN: the debug starts here are a sample of this
-distribution; the final score is measured by the harness on a separate held-out set. Therefore:
+# Commands
 
-* Write ONE general program that reads `api.observe()` and decides what to do from the current
-  state (is the part in hand? where is it relative to the goal? is it stuck?). Branch on the
-  observation, never on the start id.
-* Never hard-code poses, offsets or thresholds copied from a particular episode's trace.
-* Recompute grasp-dependent targets from the current observation each time; do not assume the
-  grasp is where it was a second ago.
-* A fix that helps one start must not break another. Always re-run `evaluate` to see the whole set.
+replay <id>    run policy.py on one debug start (ids in starts.json). Writes attempts/rNN/<id>_k/:
+               trace.json, summary.txt, keyframes/ (png after each primitive: left global camera,
+               right wrist camera), episode.mp4. Max {max_replays} per start per round.
+evaluate       run policy.py on all debug starts = one round. Writes rounds/rNN/report.md and
+               attempts/rNN/<id>_eval/ for failures. You have {rounds} calls; when all starts
+               pass, the set grows by {grow}, up to {max_starts}; passing all of those ends the loop.
 
-## Your sandbox
+The simulator's distance-to-goal is never shown. Shell is limited to these two commands and
+read-only inspection; edit policy.py with the Edit tool and keep it importable.
 
-```
-policy.py        the file you edit. Must define policy(api). This is the only file that matters.
-starts.json      ids of the current debug starts (kind-NN, e.g. loose-00 ... near-04)
-replay <id>      run policy.py on one debug start. Writes attempts/rNN/<id>_<k>/ with
-                   trace.json    every primitive call: args, result, and the state after it
-                                 (tcp, part position, gripper width, external wrench on the hand)
-                   summary.txt   outcome, compressed trace, your print() output
-                   code.py       the policy.py that was run
-                   keyframes/    an image after every primitive call, plus final.png; each is two
-                                 views side by side: left a fixed global camera, right the wrist
-                                 camera on the hand. Open them with the Read tool.
-                   episode.mp4   the whole episode, same two views (for humans; you cannot view it)
-                 Limit: {max_replays} replays per start per round. Then move on or evaluate.
-evaluate         run policy.py on ALL debug starts = one round. Writes rounds/rNN/report.md
-                 (per-kind table, compressed traces of every failed start) and
-                 attempts/rNN/<id>_eval/ for each failure. You have exactly {rounds} evaluate
-                 calls. When a round passes every start, the set grows by {grow} per kind and the
-                 next round scores on the larger set.
-findings.md      write this at the end (see below).
-```
-
-Both commands print their summary to stdout and also write it to disk. The simulator's own
-distance-to-goal is never shown: like a real robot, you judge from the observation. Your shell is
-restricted to `replay`, `evaluate` and read-only inspection (ls, cat, head, tail, grep, diff,
-python3 -c for arithmetic). Edit files with the Edit tool.
-
-## What policy.py may use
+# API
 
 {spec}
 
-You may also import numpy and these quaternion helpers from `assembly_policy.sim.robot`:
-quat_mul, quat_conj, quat_to_mat, mat_to_quat, quat_apply, axis_angle_quat. Quaternions are
-(w, x, y, z); positions are metres in the world frame; +z is up. `tcp` is the fingertip centre:
-its +z axis points from palm to fingertips (the approach direction), +y is the finger closing
-axis. The fixed numbers of the task: {const}
+Also allowed: numpy, and quat_mul, quat_conj, quat_to_mat, mat_to_quat, quat_apply,
+axis_angle_quat from assembly_policy.sim.robot. Quaternions are (w,x,y,z), positions metres in
+the world frame, +z up; tcp +z points palm->fingertips, +y is the finger closing axis.
+Constants: {const}
 
-## Hard rules
+# Procedure
 
-* Edit only policy.py. Do not create other modules, do not import anything from the simulator
-  except the helpers above, do not read or run anything outside this directory. The only way to
-  execute the policy is `replay` and `evaluate`.
-* No special-casing of debug starts, no reading of ground truth. Breaking this makes the result
-  worthless.
-* Keep policy.py importable at all times: a syntax error fails every start of a round.
-
-## How to work (follow this order)
-
-1. Read starts.json. Run `evaluate` once on the given policy.py to get round 1.
-2. Read rounds/r01/report.md. For failed starts, read attempts/r01/<id>_eval/summary.txt and
-   trace.json; look at keyframes/final.png and the keyframe after the last primitive. Diagnose:
-   grasp missed or slipped (gripper width), target unreachable (move_to FAIL unreachable),
-   jam at the fixture mouth (tcp stops short of target while wrench grows), wrong orientation,
-   time ran out. Group failures by cause across kinds before changing anything.
-3. Fix policy.py for one cause. Test with `replay <id>` on one or two affected starts (at most
-   {max_replays} per start). Then `evaluate` to confirm nothing else broke. Prefer one real
-   diagnosis-driven change per round over many speculative ones.
-4. Repeat until the evaluate budget is used. Use every evaluate call: if all starts pass, the set
-   grows and new starts will expose what is still fragile.
-5. When the budget is used (evaluate refuses), write findings.md: root causes observed (which
-   starts), what fixed them (evidence: which starts flipped), what is still failing and why, and
-   which round you consider best. Then stop.
-
-Be concrete and economical. The trace numbers are the evidence; reason from them. Start now.
+1. `evaluate`. Read the report; for failures read summary.txt, trace.json and keyframes.
+2. Group failures by cause. Fix one cause in policy.py, check with `replay` on affected starts,
+   then `evaluate`.
+3. Repeat until `evaluate` refuses, then write findings.md: causes, fixes with evidence, what
+   still fails, best round.
 """
 
 
@@ -144,8 +98,9 @@ def setup(out: Path, a):
         w.write_text(f'#!/bin/bash\nexport PYTHONPATH="{ROOT}:{ROOT}/cap" MUJOCO_GL="${{MUJOCO_GL:-egl}}"\n'
                      f'exec "{py}" "{ROOT}/cap/agent_tools.py" {cmd} "$@"\n')
         w.chmod(0o755)
-    st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), per_family=a.per_family, grow=a.grow,
-              round=0, max_rounds=a.rounds, max_replays_per_start=a.max_replays, replays={})
+    st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), n_starts=a.starts, grow=a.grow,
+              max_starts=a.max_starts, round=0, max_rounds=a.rounds,
+              max_replays_per_start=a.max_replays, replays={})
     (out / "state.json").write_text(json.dumps(st, indent=1))
     import agent_tools                                    # noqa: E402  (same PYTHONPATH)
     agent_tools.RUN = out
@@ -155,7 +110,7 @@ def setup(out: Path, a):
     env.set_states([0], s0[None, :], task_ids=[0])
     const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
     brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const),
-                         rounds=a.rounds, grow=a.grow, max_replays=a.max_replays)
+                         rounds=a.rounds, grow=a.grow, max_starts=a.max_starts, max_replays=a.max_replays)
     (out / "BRIEF.md").write_text(brief)
     return brief
 
@@ -185,25 +140,12 @@ def rounds_done(out: Path):
     return json.loads((out / "state.json").read_text())["round"]
 
 
-def best_round(out: Path):
-    best = None
-    if not (out / "log.jsonl").exists():
-        return None
-    for line in (out / "log.jsonl").read_text().splitlines():
-        r = json.loads(line)
-        if "round" not in r:
-            continue
-        key = (r["n_ok"] / max(r["n"], 1), r["n"], r["round"])
-        if best is None or key > best[0]:
-            best = (key, r["round"])
-    return best
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="R16")
-    ap.add_argument("--per-family", type=int, default=5)
-    ap.add_argument("--grow", type=int, default=5)
+    ap.add_argument("--starts", type=int, default=5, help="debug starts at the beginning")
+    ap.add_argument("--grow", type=int, default=5, help="added whenever a round passes every start")
+    ap.add_argument("--max-starts", type=int, default=100, help="passing all of these ends the loop")
     ap.add_argument("--rounds", type=int, default=10)
     ap.add_argument("--max-replays", type=int, default=3)
     ap.add_argument("--level", default="grasp")
@@ -234,23 +176,21 @@ def main():
                        f"report, fix policy.py, replay, evaluate. Write findings.md only when evaluate refuses.",
                   a, session, resume=True)
 
-    best = best_round(out)
-    if best is None:
+    if not (out / "log.jsonl").exists():
         sys.exit("[run] no rounds were evaluated")
-    (rate, n, _), rnd = best
-    print(f"\n==> best round r{rnd:02d}: {rate * 100:.0f}% on {n} debug starts", flush=True)
+    rnd, path = eval_protocol.best_round(out)
+    print(f"\n==> best round r{rnd:02d}", flush=True)
     for line in (out / "log.jsonl").read_text().splitlines():
         r = json.loads(line)
         if "round" in r:
-            print(f"  r{r['round']:02d}: {r['n_ok']}/{r['n']}  {r['by_family']}", flush=True)
+            print(f"  r{r['round']:02d}: {r['n_ok']}/{r['n']}  mean time {r.get('time_mean_s')} s", flush=True)
     if a.no_eval:
         return
-    print(f"[eval] official protocol on rounds/r{rnd:02d}/policy.py", flush=True)
-    import agent_tools
-    policy = agent_tools.load_policy(out / "rounds" / f"r{rnd:02d}" / "policy.py")
+    print(f"[eval] held-out NIST protocol on {path.relative_to(out)}", flush=True)
+    policy = eval_protocol.load_policy(path)
     env = api.make_env(a.task)
-    summary, rows = eval_protocol.official_eval(env, policy, a.task, a.level, a.bank_dir)
-    summary["policy"] = str(out / "rounds" / f"r{rnd:02d}" / "policy.py")
+    summary, rows = eval_protocol.evaluate(env, policy, a.task, a.level, a.bank_dir)
+    summary["policy"] = str(path)
     (out / f"eval_r{rnd:02d}.json").write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
     eval_protocol.print_summary(summary, f"r{rnd:02d}")
 

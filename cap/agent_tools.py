@@ -4,7 +4,8 @@
                              {trace.json, summary.txt, code.py, keyframes/*.png, episode.mp4}
     evaluate                 run policy.py on every debug start (one "round"); writes
                              rounds/rNN/{policy.py, results.json, report.md}; failed starts also get
-                             attempts/rNN/<id>_eval/. Grows the debug set when everything passes.
+                             attempts/rNN/<id>_eval/. Grows the debug set when everything passes,
+                             up to max_starts; passing all of those completes the loop.
 
 State lives in state.json; the harness (agent_loop.py) creates it and reads log.jsonl afterwards.
 The simulator's assembly distance is never written anywhere the agent reads.
@@ -45,19 +46,14 @@ def save_state(st):
 
 
 def debug_starts(st):
-    """First k of a fixed per-family shuffle of the training bank, so a larger set contains the smaller."""
+    """First n of a fixed shuffle of the training bank's loose starts, so a larger set contains the smaller."""
     z = np.load(Path(st["bank_dir"]) / f"{st['task']}_train.npz")
-    rng = np.random.default_rng(0)
-    out = []
-    for i, f in enumerate(FAMILIES):
-        idx = rng.permutation(np.nonzero(z["family"] == i)[0])[: st["per_family"]]
-        out += [dict(id=f"{f}-{j:02d}", family=f, bank_idx=int(b), state=z["states"][b]) for j, b in enumerate(idx)]
-    return out
+    idx = np.random.default_rng(0).permutation(np.nonzero(z["family"] == FAMILIES.index("loose"))[0])[: st["n_starts"]]
+    return [dict(id=f"s{j:02d}", bank_idx=int(b), state=z["states"][b]) for j, b in enumerate(idx)]
 
 
 def write_starts(st):
-    (RUN / "starts.json").write_text(json.dumps(
-        [dict(id=s["id"], family=s["family"]) for s in debug_starts(st)], indent=0))
+    (RUN / "starts.json").write_text(json.dumps([s["id"] for s in debug_starts(st)]))
 
 
 def load_policy(path: Path):
@@ -177,7 +173,7 @@ def write_attempt(adir: Path, start, r, vis: Vis | None, video=False):
     adir.mkdir(parents=True, exist_ok=True)
     shutil.copy(RUN / "policy.py", adir / "code.py")
     (adir / "trace.json").write_text(json.dumps(r["trace"], indent=0))
-    summ = [f"start {start['id']}  family {start['family']}", outcome_line(r), "",
+    summ = [f"start {start['id']}", outcome_line(r), "",
             "TRACE (compressed; full detail in trace.json):", *compress_trace(r["trace"]), "",
             "POLICY STDOUT/STDERR:", r.get("stdout", "").rstrip() or "(none)"]
     (adir / "summary.txt").write_text("\n".join(summ) + "\n")
@@ -249,7 +245,7 @@ def cmd_evaluate(a):
                      trace=[], stdout="", d_asm=float("nan"))
         else:
             r = run_one(env, s, policy, st["level"], seed=1000 * rnd + j)
-        rec = dict(id=s["id"], family=s["family"], bank_idx=s["bank_idx"], success=bool(r["success"]),
+        rec = dict(id=s["id"], bank_idx=s["bank_idx"], success=bool(r["success"]),
                    safety=bool(r.get("safety", False)), timeout=bool(r.get("timeout", False)),
                    steps=int(r.get("steps", 0)), error=r.get("error"), d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2),
                    trace=r.get("trace", []))
@@ -258,25 +254,29 @@ def cmd_evaluate(a):
         results.append(rec)
         print(f"  {s['id']:12s} {outcome_line(r)}", flush=True)
     n_ok, n = sum(r["success"] for r in results), len(results)
-    fam = {f: (sum(r["success"] for r in results if r["family"] == f), sum(r["family"] == f for r in results)) for f in FAMILIES}
-    grew = False
+    grew = done = False
     if n_ok == n:
-        st["per_family"] += st["grow"]
-        grew = True
-        write_starts(st)
+        if st["n_starts"] >= st["max_starts"]:
+            done = True                                   # everything passes at the cap: loop complete
+            st["round"] = st["max_rounds"]
+        else:
+            st["n_starts"] = min(st["n_starts"] + st["grow"], st["max_starts"])
+            grew = True
+            write_starts(st)
     save_state(st)
 
     # report for the agent (no d_asm)
-    rep = [f"# Round {rnd:02d} of {st['max_rounds']}: {n_ok}/{n} debug starts succeeded", "",
-           "| family | success | starts |", "|---|---|---|"]
-    for f in FAMILIES:
-        cells = " ".join(f"{r['id'][-2:]}:{'ok' if r['success'] else ('ERR' if r['error'] else ('SAF' if r['safety'] else 'TO'))}"
-                         for r in results if r["family"] == f)
-        rep.append(f"| {f} | {fam[f][0]}/{fam[f][1]} | {cells} |")
-    rep.append("")
+    ok_t = [r["steps"] * 0.04 for r in results if r["success"]]
+    rep = [f"# Round {rnd:02d} of {st['max_rounds']}: {n_ok}/{n} starts succeeded"
+           + (f", mean time {np.mean(ok_t):.1f} s" if ok_t else ""), "",
+           " ".join(f"{r['id']}:{'ok' if r['success'] else ('ERR' if r['error'] else ('SAF' if r['safety'] else 'TO'))}"
+                    for r in results), ""]
     if grew:
-        rep.append(f"ALL PASSED. The debug set grew to {st['per_family']} starts per family "
-                   f"({st['per_family'] * len(FAMILIES)} total); new ids are in starts.json. The next round scores on all of them.")
+        rep.append(f"ALL PASSED. The debug set grew to {st['n_starts']} starts; new ids are in starts.json. "
+                   f"The next round scores on all of them.")
+        rep.append("")
+    if done:
+        rep.append(f"ALL {n} STARTS PASSED AT THE MAXIMUM SET SIZE. The loop is complete: write findings.md and stop.")
         rep.append("")
     failed = [r for r in results if not r["success"]]
     if failed:
@@ -287,12 +287,13 @@ def cmd_evaluate(a):
             rep += ["```", *compress_trace(r["trace"])[-25:], "```",
                     f"details: attempts/r{rnd:02d}/{r['id']}_eval/ (trace.json, summary.txt, keyframes/)", ""]
     left = st["max_rounds"] - rnd
-    rep.append(f"Evaluate calls left: {left}." + (" This was the last one: write findings.md and stop." if left == 0 else ""))
+    if not done:
+        rep.append(f"Evaluate calls left: {left}." + (" This was the last one: write findings.md and stop." if left == 0 else ""))
     (rdir / "report.md").write_text("\n".join(rep) + "\n")
     (rdir / "results.json").write_text(json.dumps(results, indent=0))
     with open(RUN / "log.jsonl", "a") as f:
-        f.write(json.dumps(dict(round=rnd, n_ok=n_ok, n=n, per_family=st["per_family"] - (st["grow"] if grew else 0),
-                                by_family={k: list(v) for k, v in fam.items()}, grew=grew,
+        f.write(json.dumps(dict(round=rnd, n_ok=n_ok, n=n, grew=grew, done=done,
+                                time_mean_s=round(float(np.mean(ok_t)), 2) if ok_t else None,
                                 policy_sha=hashlib.sha1((rdir / "policy.py").read_bytes()).hexdigest()[:10],
                                 wall_s=round(time.time() - t0, 1),
                                 episodes=[{k: v for k, v in r.items() if k != "trace"} for r in results])) + "\n")

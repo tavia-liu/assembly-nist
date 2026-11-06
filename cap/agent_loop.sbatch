@@ -10,5 +10,5 @@
 set -euo pipefail
 cd /engrfs/project/chongjie/buzhao/autodeco/assembly-nist
 export PYTHONPATH=.:cap MUJOCO_GL=egl CAP_CLAUDE_BIN="$HOME/.local/bin/claude"
-.venv/bin/python -u cap/agent_loop.py --task "${TASK:-R16}" --per-family "${PER_FAMILY:-5}" --grow "${GROW:-5}" \
+.venv/bin/python -u cap/agent_loop.py --task "${TASK:-R16}" --starts "${STARTS:-5}" --grow "${GROW:-5}" --max-starts "${MAX_STARTS:-100}" \
     --rounds "${ROUNDS:-10}" --level "${LEVEL:-grasp}" --model "${MODEL:-claude-opus-5-5[1m]}" ${OUT:+--out "$OUT"}

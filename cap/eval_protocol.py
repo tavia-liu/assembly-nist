@@ -1,11 +1,12 @@
-"""Official evaluation of a cap policy: the AlphaNIST protocol as implemented in assembly_policy.evaluate.
+"""Held-out evaluation of a cap policy: the NIST task-board benchmark in simulation.
 
-5 seeds x 32 trials drawn (rng 10_000 + seed, with replacement) from the task's frozen evaluation bank
-<data>/banks/<TASK>_eval.npz (128 states per reset family, disjoint from the training bank). The cap
-policy is deterministic, so a seed only decides which 32 of the 640 bank states are drawn.
+Every episode is a full assembly from scratch: the part lies loose on the board at a random pose,
+the gripper is open. Starts are the `loose` states of the task's frozen evaluation bank
+(<data>/banks/<TASK>_eval.npz, 128 per task, disjoint from the training bank the loop debugs on).
+Reported: success rate and completion time of the successful episodes.
 
-  PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop/R16_bank     # best version by log.jsonl
-  PYTHONPATH=.:cap python cap/eval_protocol.py --policy cap/runs/fixloop/R16_bank/v08.py
+  PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop/R16_agent     # best round
+  PYTHONPATH=.:cap python cap/eval_protocol.py --policy <path>/policy.py
 """
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ import argparse
 import importlib.util
 import json
 import time
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -22,8 +22,7 @@ import api
 from assembly_policy.sim.resets import FAMILIES
 from assembly_policy.sim.tasks import BANK_DIR
 
-SEEDS = (0, 1, 2, 3, 4)
-TRIALS = 32
+DT = 0.04
 
 
 def load_policy(path: Path):
@@ -33,83 +32,71 @@ def load_policy(path: Path):
     return mod.policy
 
 
-def best_version(run_dir: Path) -> Path:
-    """Highest debug success rate; ties go to the version scored on the larger debug set, then the later one."""
+def best_round(run_dir: Path):
+    """Highest debug success rate; ties go to the larger set, then the later round. Returns (round, policy path)."""
     best = None
     for line in (run_dir / "log.jsonl").read_text().splitlines():
         r = json.loads(line)
-        if r.get("eval") or "turn" not in r:
+        if "round" not in r:
             continue
-        key = (r["n_ok"] / max(r["n"], 1), r["n"], r["turn"])
+        key = (r["n_ok"] / max(r["n"], 1), r["n"], r["round"])
         if best is None or key > best[0]:
-            best = (key, r["turn"])
-    return run_dir / f"v{best[1]:02d}.py"
+            best = (key, r["round"])
+    return best[1], run_dir / "rounds" / f"r{best[1]:02d}" / "policy.py"
 
 
-def official_eval(env, policy, task, level, bank_dir=BANK_DIR, seeds=SEEDS, trials=TRIALS, verbose=True):
-    """Returns (summary, episodes). Mirrors assembly_policy.evaluate.evaluate for one task."""
+def evaluate(env, policy, task, level, bank_dir=BANK_DIR, verbose=True):
     bank = np.load(Path(bank_dir) / f"{task}_eval.npz")
-    states, fam_id = bank["states"], bank["family"]
-    rows, by_fam, by_seed = [], defaultdict(list), defaultdict(list)
-    t0 = time.time()
-    for s in seeds:
-        rng = np.random.default_rng(10_000 + s)
-        for k, i in enumerate(rng.integers(0, len(states), trials)):
-            fam = FAMILIES[int(fam_id[i])]
-            try:
-                r = api.run_episode(env, states[i], policy, level=level, seed=s * 1000 + k)
-            except api.LevelError as e:
-                r = dict(success=False, safety=False, timeout=False, steps=0, error=str(e), d_asm=float("nan"))
-            ok = bool(r["success"])
-            rows.append(dict(seed=s, trial=k, bank_idx=int(i), family=fam, success=ok,
-                             safety=bool(r.get("safety", False)), timeout=bool(r.get("timeout", False)),
-                             steps=int(r.get("steps", 0)), error=r.get("error"),
-                             d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2)))
-            by_fam[fam].append(ok); by_seed[s].append(ok)
-        if verbose:
-            print(f"[eval] seed {s}: {sum(by_seed[s])}/{trials} = {100 * np.mean(by_seed[s]):.1f}%   "
-                  f"({time.time() - t0:.0f}s)", flush=True)
-    seed_rates = [100 * np.mean(by_seed[s]) for s in seeds]
-    total = sum(r["success"] for r in rows)
-    summary = dict(task=task, protocol="AlphaNIST: 5 seeds x 32 trials from the frozen eval bank",
-                   seeds=list(seeds), trials=trials, n=len(rows), n_ok=total,
-                   success_rate=round(100 * total / len(rows), 1),
-                   seed_mean=round(float(np.mean(seed_rates)), 1), seed_std=round(float(np.std(seed_rates)), 1),
-                   by_family={f: dict(n_ok=sum(v), n=len(v), rate=round(100 * np.mean(v), 1))
-                              for f, v in by_fam.items()},
-                   safety=sum(r["safety"] for r in rows), errors=sum(bool(r["error"]) for r in rows))
+    idx = np.nonzero(bank["family"] == FAMILIES.index("loose"))[0]
+    rows, t0 = [], time.time()
+    for k, i in enumerate(idx):
+        try:
+            r = api.run_episode(env, bank["states"][i], policy, level=level, seed=20_000 + k)
+        except api.LevelError as e:
+            r = dict(success=False, safety=False, timeout=False, steps=0, error=str(e), d_asm=float("nan"))
+        rows.append(dict(trial=k, bank_idx=int(i), success=bool(r["success"]), safety=bool(r.get("safety", False)),
+                         timeout=bool(r.get("timeout", False)), steps=int(r.get("steps", 0)),
+                         time_s=round(int(r.get("steps", 0)) * DT, 2), error=r.get("error"),
+                         d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2)))
+        if verbose and (k + 1) % 32 == 0:
+            print(f"[eval] {k + 1}/{len(idx)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
+    ok = [x for x in rows if x["success"]]
+    summary = dict(task=task, protocol="NIST task board: full assembly from the loose starts of the frozen eval bank",
+                   n=len(rows), n_ok=len(ok), success_rate=round(100 * len(ok) / max(len(rows), 1), 1),
+                   time_mean_s=round(float(np.mean([x["time_s"] for x in ok])), 2) if ok else None,
+                   time_median_s=round(float(np.median([x["time_s"] for x in ok])), 2) if ok else None,
+                   safety=sum(x["safety"] for x in rows), errors=sum(bool(x["error"]) for x in rows),
+                   timeouts=sum(x["timeout"] for x in rows))
     return summary, rows
 
 
-def print_summary(summary, name):
-    print("by family:")
-    for f in FAMILIES:
-        b = summary["by_family"].get(f)
-        if b:
-            print(f"  {f:8s} {b['n_ok']:3d}/{b['n']:<3d} {b['rate']:5.1f}%")
-    print(f"==> {name} on {summary['task']}: {summary['n_ok']}/{summary['n']} = {summary['success_rate']}%  "
-          f"(seed mean {summary['seed_mean']} +- {summary['seed_std']}, safety {summary['safety']}, "
-          f"errors {summary['errors']})", flush=True)
+def print_summary(s, name):
+    print(f"==> {name} on {s['task']}: {s['n_ok']}/{s['n']} = {s['success_rate']}%  "
+          f"time mean {s['time_mean_s']} s / median {s['time_median_s']} s  "
+          f"(timeouts {s['timeouts']}, safety {s['safety']}, errors {s['errors']})", flush=True)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="R16")
-    ap.add_argument("--policy", default=None, help="path to a vNN.py; default = best in --run-dir")
-    ap.add_argument("--run-dir", default="cap/runs/fixloop/R16_bank")
+    ap.add_argument("--policy", default=None, help="a policy.py; default = best round in --run-dir")
+    ap.add_argument("--run-dir", default="cap/runs/fixloop/R16_agent")
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--bank-dir", default=str(BANK_DIR))
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    path = Path(a.policy) if a.policy else best_version(Path(a.run_dir))
+    if a.policy:
+        path, name = Path(a.policy), Path(a.policy).parent.name
+    else:
+        rnd, path = best_round(Path(a.run_dir)); name = f"r{rnd:02d}"
     policy = load_policy(path)
-    out = Path(a.out or (path.parent / f"eval_{path.stem}.json"))
+    out = Path(a.out or Path(a.run_dir) / f"eval_{name}.json")
     env = api.make_env(a.task)
-    print(f"policy {path}  task {a.task}  official protocol, bank {a.bank_dir}", flush=True)
-    summary, rows = official_eval(env, policy, a.task, a.level, a.bank_dir)
+    print(f"policy {path}  task {a.task}", flush=True)
+    summary, rows = evaluate(env, policy, a.task, a.level, a.bank_dir)
     summary["policy"] = str(path)
     out.write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
-    print_summary(summary, path.name)
+    print_summary(summary, name)
     print(f"wrote {out}")
 
 
