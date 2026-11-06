@@ -167,7 +167,9 @@ class AssemblyAPI:
     def step(self, action):
         """One 25 Hz control step. action[0:7] are relative joint targets in units of
         action_scale (clipped to [-1,1]); action[7] > 0.5 opens the gripper, < -0.5 closes it,
-        in between holds. Returns observe(). Raises EpisodeOver when the episode ends."""
+        in between holds the last command. The gripper has only two targets, fully open (0.08 m)
+        or fully closed; there is no aperture control. Returns observe(). Raises EpisodeOver
+        when the episode ends."""
         self._require("step")
         return self._step(np.asarray(action, float).reshape(8))
 
