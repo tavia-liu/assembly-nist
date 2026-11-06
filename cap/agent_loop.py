@@ -1,8 +1,8 @@
 """Code-as-policy fix loop: one coding agent, one session, a sandbox with two commands.
 
 The agent (Claude Code, `claude -p` with Read/Edit/Write and a shell allow-list) works inside
-<run>/ where it owns policy.py and may run `replay <id>` and `evaluate`. It reads the artifacts
-those commands write (trace.json, summary.txt, keyframes/, episode.mp4, rounds/rNN/report.md) and
+<run>/ where it owns policy.py and may run `evaluate`. It reads the artifacts that command
+writes (rounds/rNN/report.md; per failed start trace.json, summary.txt, keyframes/, episode.mp4) and
 edits policy.py.
 
 Benchmark: the NIST task board in simulation. Every episode is a full assembly from scratch: the
@@ -38,7 +38,7 @@ CLAUDE = os.environ.get("CAP_CLAUDE_BIN", os.path.expanduser("~/.local/bin/claud
 
 # what the agent may run: the two sandbox commands plus read-only inspection of its own directory
 ALLOWED_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep",
-                 "Bash(replay:*)", "Bash(evaluate:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)",
+                 "Bash(evaluate:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)",
                  "Bash(tail:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(diff:*)", "Bash(find:*)",
                  "Bash(python3 -c:*)", "Bash(python3 -m py_compile:*)", "Bash(python3 -m json.tool:*)"]
 
@@ -56,17 +56,16 @@ scored on held-out starts you never see, by success rate and completion time. Wr
 that decides from `api.observe()`; never special-case a start or hard-code numbers taken from a
 trace.
 
-# Commands
+# Command
 
-replay <id>    run policy.py on one debug start (ids in starts.json). Writes attempts/rNN/<id>_k/:
-               trace.json, summary.txt, keyframes/ (png after each primitive: left global camera,
-               right wrist camera), episode.mp4. Max {max_replays} per start per round.
-evaluate       run policy.py on all debug starts = one round. Writes rounds/rNN/report.md and
-               attempts/rNN/<id>_eval/ for failures. You have {rounds} calls. When all starts
-               pass, the set grows ({schedule}); passing all {last} ends the loop.
+evaluate       run policy.py on all debug starts (ids in starts.json) = one round. Writes
+               rounds/rNN/report.md and, for every failed start, attempts/rNN/<id>/ with
+               trace.json, summary.txt, keyframes/ (png after each primitive: left global
+               camera, right wrist camera) and episode.mp4. You have {rounds} calls. When all
+               starts pass, the set grows ({schedule}); passing all {last} ends the loop.
 
-The simulator's distance-to-goal is never shown. Shell is limited to these two commands and
-read-only inspection; edit policy.py with the Edit tool and keep it importable.
+The simulator's distance-to-goal is never shown. Shell is limited to `evaluate` and read-only
+inspection; edit policy.py with the Edit tool and keep it importable.
 
 # API
 
@@ -80,8 +79,7 @@ Constants: {const}
 # Procedure
 
 1. `evaluate`. Read the report; for failures read summary.txt, trace.json and keyframes.
-2. Group failures by cause. Fix one cause in policy.py, check with `replay` on affected starts,
-   then `evaluate`.
+2. Group failures by cause, fix policy.py, `evaluate` again.
 3. Repeat until `evaluate` refuses, then write findings.md: causes, fixes with evidence, what
    still fails, best round.
 """
@@ -96,14 +94,14 @@ def setup(out: Path, a):
     py = sys.executable
     for f in ("api.py", "agent_tools.py", "record.py"):  # frozen copies: later harness edits must not touch this run
         shutil.copy(ROOT / "cap" / f, out / "bin" / f)
-    for cmd in ("replay", "evaluate"):
+    for cmd in ("evaluate",):
         w = out / "bin" / cmd
         w.write_text(f'#!/bin/bash\nexport PYTHONPATH="{out / "bin"}:{ROOT}:{ROOT}/cap" MUJOCO_GL="${{MUJOCO_GL:-egl}}"\n'
                      f'exec "{py}" "{out / "bin" / "agent_tools.py"}" {cmd} "$@"\n')
         w.chmod(0o755)
     schedule = [int(x) for x in a.schedule.split(",")]
     st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), schedule=schedule, stage=0,
-              round=0, max_rounds=a.rounds, max_replays_per_start=a.max_replays, replays={})
+              round=0, max_rounds=a.rounds)
     (out / "state.json").write_text(json.dumps(st, indent=1))
     import agent_tools                                    # noqa: E402  (same PYTHONPATH)
     agent_tools.RUN = out                                 # setup only; the agent runs the frozen copy in bin/
@@ -113,7 +111,7 @@ def setup(out: Path, a):
     env.set_states([0], s0[None, :], task_ids=[0])
     const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
     brief = BRIEF.format(task=a.task, spec=api.spec(a.level), const=json.dumps(const), rounds=a.rounds,
-                         schedule=" -> ".join(map(str, schedule)), last=schedule[-1], max_replays=a.max_replays)
+                         schedule=" -> ".join(map(str, schedule)), last=schedule[-1])
     (out / "BRIEF.md").write_text(brief)
     return brief
 
@@ -149,7 +147,6 @@ def main():
     ap.add_argument("--schedule", default="2,5,10,15,20",
                     help="debug-set sizes; the set moves to the next size when a round passes every start")
     ap.add_argument("--rounds", type=int, default=25)
-    ap.add_argument("--max-replays", type=int, default=3)
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--start", default=str(ROOT / "cap/naive_r16.py"))
     ap.add_argument("--model", default="claude-opus-5-5[1m]")
@@ -175,7 +172,7 @@ def main():
             break
         print(f"[agent] stopped after {done}/{a.rounds} rounds; resuming ({i + 1}/{a.max_resumes})", flush=True)
         run_agent(out, f"You have used {done} of {a.rounds} evaluate calls. Continue the loop: diagnose the latest "
-                       f"report, fix policy.py, replay, evaluate. Write findings.md only when evaluate refuses.",
+                       f"report, fix policy.py, evaluate. Write findings.md only when evaluate refuses.",
                   a, session, resume=True)
 
     if not (out / "log.jsonl").exists():

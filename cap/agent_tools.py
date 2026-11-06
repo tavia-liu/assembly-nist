@@ -225,7 +225,6 @@ def cmd_evaluate(a):
     if st["round"] >= st["max_rounds"]:
         sys.exit(f"evaluate budget exhausted ({st['max_rounds']} rounds). Write findings.md and stop.")
     st["round"] += 1
-    st["replays"] = {}
     rnd = st["round"]
     rdir = RUN / "rounds" / f"r{rnd:02d}"
     rdir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +250,7 @@ def cmd_evaluate(a):
                    steps=int(r.get("steps", 0)), error=r.get("error"), d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2),
                    trace=r.get("trace", []))
         if not rec["success"] and not import_error:
-            write_attempt(RUN / "attempts" / f"r{rnd:02d}" / f"{s['id']}_eval", s, r, vis)
+            write_attempt(RUN / "attempts" / f"r{rnd:02d}" / s["id"], s, r, vis, video=True)
         results.append(rec)
         print(f"  {s['id']:12s} {outcome_line(r)}", flush=True)
     n_ok, n = sum(r["success"] for r in results), len(results)
@@ -286,7 +285,7 @@ def cmd_evaluate(a):
             rep.append(f"### {r['id']}  {'ERROR ' + str(r['error']) if r['error'] else ('SAFETY' if r['safety'] else 'TIMEOUT')}"
                        f"  steps={r['steps']}")
             rep += ["```", *compress_trace(r["trace"])[-25:], "```",
-                    f"details: attempts/r{rnd:02d}/{r['id']}_eval/ (trace.json, summary.txt, keyframes/)", ""]
+                    f"details: attempts/r{rnd:02d}/{r['id']}/ (trace.json, summary.txt, keyframes/, episode.mp4)", ""]
     left = st["max_rounds"] - rnd
     if not done:
         rep.append(f"Evaluate calls left: {left}." + (" This was the last one: write findings.md and stop." if left == 0 else ""))
@@ -304,7 +303,7 @@ def cmd_evaluate(a):
 def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest="cmd", required=True)
-    r = sp.add_parser("replay"); r.add_argument("start_id")
+    r = sp.add_parser("replay"); r.add_argument("start_id")       # kept for manual use; not exposed to the agent
     sp.add_parser("evaluate")
     a = ap.parse_args()
     {"replay": cmd_replay, "evaluate": cmd_evaluate}[a.cmd](a)
