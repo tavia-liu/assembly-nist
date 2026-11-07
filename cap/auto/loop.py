@@ -147,6 +147,7 @@ def outcome(r) -> str:
 class Loop:
     def __init__(self, a, run: Path):
         self.a, self.run = a, run
+        self.resumed = bool(a.resume)                         # only the first turn after --resume may pick up a pending experiment
         self.st = json.loads((run / "state.json").read_text()) if (run / "state.json").exists() else None
         if self.st is None:
             self.setup()
@@ -457,7 +458,8 @@ class Loop:
     # ----- the whole run
     def pending_turn(self, text, tag):
         """A resumed run first finishes an experiment the coder asked for; otherwise it (re)sends `text`."""
-        name = self.unrun_experiment() if self.st["session"] else None
+        name = self.unrun_experiment() if self.resumed and self.st["session"] else None
+        self.resumed = False
         if name:
             self.log(f"resume: running the pending experiment {name}")
             self.coder_turn(self.run_experiment(name), f"{tag}_resume")
