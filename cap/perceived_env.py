@@ -38,9 +38,10 @@ class PerceivedEnv(BatchedAssemblyEnv):
 
     def _refresh(self, ids):
         t0 = time.perf_counter()
-        for i in ids:
+        fk = self.models[0].fk.forward(self.state[ids][:, self.sq])
+        for j, i in enumerate(ids):
             views = self.perc.capture(self.state[i])
-            T, conf = self.trackers[i].estimate(views)
+            T, conf = self.trackers[i].estimate(views, approach=fk["tcp_R"][j][:, 2])
             if T is not None:
                 self.est_p[i], self.est_q[i] = T[:3, 3], _mat_to_quat(T[:3, :3])
                 self.err.append(float(np.linalg.norm(self.est_p[i] - self.state[i, self.sp[:3]])))

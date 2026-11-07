@@ -99,7 +99,8 @@ class AssemblyAPI:
         if self._perc is None:
             return true_p, true_q, None
         if self._perc_cache is None or self._perc_cache[0] != int(self.env.t[0]):
-            pos, quat, conf = self._perc.estimate(s, self._views())
+            approach = self.tm.fk.forward(self.env.state[:1, self.env.sq])["tcp_R"][0][:, 2]
+            pos, quat, conf = self._perc.estimate(s, self._views(), approach=approach)
             if pos is None:                                             # never seen: no pose
                 pos, quat = np.full(3, np.nan), np.full(4, np.nan)
             else:

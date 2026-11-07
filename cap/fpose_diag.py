@@ -68,7 +68,8 @@ for k in range(n):
     env.set_states([0], z["states"][k][None], task_ids=[0])
     errs, cams = [], []
     for t in range(12):
-        T, conf = tr.estimate(perc.capture(env.state[0]))
+        appr = env.models[0].fk.forward(env.state[:1, env.sq])["tcp_R"][0][:, 2]
+        T, conf = tr.estimate(perc.capture(env.state[0]), approach=appr)
         errs.append(err(T, env.state[0]) if T is not None else -1); cams.append(conf.get("cam"))
         env.step(np.array([[0, 0, 0, 0, 0, 0, 0, -1.0]]))
     print(f"full tracker start {k}: errs {np.round(errs, 1).tolist()} cam {cams[0]}->{cams[-1]}", flush=True)

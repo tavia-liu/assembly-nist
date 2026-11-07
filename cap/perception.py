@@ -125,7 +125,9 @@ class FPoseTracker:
         Ti = np.eye(4); Ti[:3, :3] = Rw.T; Ti[:3, 3] = -Rw.T @ view["cam_pos"]
         return T, Ti
 
-    def estimate(self, views):
+    def estimate(self, views, approach=None):
+        """approach: the hand's approach direction (tcp +z, palm -> fingertips) in the world; for a rod / peg held
+        in the fingers it fixes which end is the inserting end (the two ends look alike)."""
         px = {n: int(v["mask"].sum()) for n, v in views.items()}
         ext = {n: (self.extent(v["mask"]) if px[n] >= self.min_px[n] else 0.0) for n, v in views.items()}
         ext["wrist"] *= 0.5                                           # the wrist camera mostly sees the tip end-on
@@ -153,13 +155,23 @@ class FPoseTracker:
         T = T_wc @ np.asarray(T_cp)
         if self.axial:
             # A rod / peg held in the fingers shows the estimator only a stretch of its length, which leaves the pose
-            # free to slide along the axis. Its inserting end (the part-frame origin) is the lowest visible point
-            # along the axis: anchor the origin there.
-            pts = PartPerceiver.points(v)
+            # free to slide along the axis, and its two ends look alike. The inserting end (part-frame origin, the
+            # base of the +z axis) points away from the palm; it is the extreme visible point along the axis, taken
+            # over every camera that sees the part (the hand hides different stretches from different cameras).
+            R = T[:3, :3].copy()
+            if approach is not None and float(R[:, 2] @ np.asarray(approach)) > 0:
+                R = R @ np.diag([1.0, -1.0, -1.0])                 # 180 deg about x: flips z, keeps a right-handed frame
+            # every camera that sees anything of it, the wrist camera included: it looks at the tip face end-on
+            pts = [PartPerceiver.points(views[n]) for n in views if px[n] >= 20]
+            pts = np.concatenate(pts) if pts else np.zeros((0, 3))
             if len(pts) >= 20:
-                axis = T[:3, :3][:, 2]
+                axis = R[:, 2]
                 proj = (pts - T[:3, 3]) @ axis
-                T[:3, 3] = T[:3, 3] + axis * float(np.percentile(proj, 1.0))
+                T[:3, 3] = T[:3, 3] + axis * float(np.percentile(proj, 0.5))
+            T[:3, :3] = R
+        if self.T_world_part is not None and self.cam == cam and np.linalg.norm(T[:3, 3] - self.T_world_part[:3, 3]) > 0.03:
+            self.stale += 1                                           # a 3 cm jump in one frame is a glitch: hold
+            return self.T_world_part, dict(n_points=px[cam], rms_mm=None, stale=self.stale, views=px, cam=cam)
         self.T_world_part, self.cam, self.stale, self.lost = T, cam, 0, 0
         return self.T_world_part, dict(n_points=px[cam], rms_mm=None, stale=0, views=px, cam=cam)
 
@@ -230,11 +242,11 @@ class PartPerceiver:
                 break
         return R, t, float(np.sqrt(np.mean(d_keep ** 2))), int(keep.sum())
 
-    def estimate(self, state, views=None):
-        """(pos, quat, conf) of the part from the two cameras; pos/quat None until the part has been seen once."""
+    def estimate(self, state, views=None, approach=None):
+        """(pos, quat, conf) of the part from the cameras; pos/quat None until the part has been seen once."""
         views = views if views is not None else self.capture(state)
         if self.fpose is not None:
-            T, conf = self.fpose.estimate(views)
+            T, conf = self.fpose.estimate(views, approach=approach)
             if T is None:
                 return None, None, conf
             return T[:3, 3].copy(), mat_to_quat(T[:3, :3][None])[0], conf
