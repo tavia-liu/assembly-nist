@@ -11,7 +11,7 @@
 set -euo pipefail
 cd /engrfs/project/chongjie/buzhao/autodeco/assembly-nist
 export PYTHONPATH=.:cap:cap/auto MUJOCO_GL=egl CAP_CLAUDE_BIN="$HOME/.local/bin/claude"
-export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/engrfs/project/chongjie/buzhao/claude/config}"   # creds/ slots live here
+export CLAUDE_CONFIG_DIR="${CAP_LOOP_CONFIG:-/engrfs/project/chongjie/buzhao/claude/config-loop}"   # own creds/ slots; see save_creds.sh
 .venv/bin/python -u cap/auto/loop.py --task "${TASK:-R8}" --schedule "${SCHEDULE:-2,5,10,15,20}" \
     --rounds "${ROUNDS:-25}" --horizon "${HORIZON:-40}" --level "${LEVEL:-grasp}" \
     --model "${MODEL:-claude-opus-5-5[1m]}" --audit-model "${AUDIT_MODEL:-claude-opus-5-5[1m]}" \

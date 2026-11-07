@@ -14,6 +14,7 @@ replies READY (stage files revised) or EXPERIMENT (experiments/NN_<slug>/ to run
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -24,7 +25,9 @@ import sys
 import time
 import traceback
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -47,25 +50,103 @@ CODER_TOOLS = ["Edit", "Write"] + READ_ONLY
 DISALLOWED = ["WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"]
 _LIMIT_RE = re.compile(r"(session|usage|weekly|rate|hour)\s+limit|limit\s+reached|hit your|resets \d", re.I)
 CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")))
-CREDS_DIR = CONFIG_DIR / "creds"     # <account>.json copies of .credentials.json; `current` names the live one
+CREDS_DIR = CONFIG_DIR / "creds"     # <account>.json slots, `order` (one name per line, first = preferred), `current`, limits.json
 
 
-def rotate_credentials(log):
-    """Swap the live .credentials.json for the next saved account in CREDS_DIR (bash cap/auto/save_creds.sh <name>
-    saves one). The live file is copied back to its slot first so refreshed tokens are kept. Returns the new name."""
-    live = CONFIG_DIR / ".credentials.json"
-    names = sorted(p.stem for p in CREDS_DIR.glob("*.json")) if CREDS_DIR.is_dir() else []
-    if len(names) < 2 or not live.exists():
+def _reset_epoch(msg):
+    """Epoch when a limit lifts, from 'resets 6pm (America/Chicago)' or 'resets Nov 12, 3pm (America/Chicago)'."""
+    m = re.search(r"resets?\s+(?:at\s+|on\s+)?([^()]+?)\s*\(([\w/_+-]+)\)", msg)
+    if not m:
         return None
-    cur_f = CREDS_DIR / "current"
-    cur = cur_f.read_text().strip() if cur_f.exists() else ""
-    if cur in names:
-        shutil.copy(live, CREDS_DIR / f"{cur}.json")
-    nxt = names[(names.index(cur) + 1) % len(names)] if cur in names else names[0]
-    shutil.copy(CREDS_DIR / f"{nxt}.json", live)
-    cur_f.write_text(nxt)
-    log(f"credentials: {cur or '?'} hit a limit; switched to {nxt}")
-    return nxt
+    txt, tz = m.group(1), m.group(2)
+    try:
+        zone = ZoneInfo(tz)
+    except Exception:
+        zone = ZoneInfo("America/Chicago")
+    now = datetime.now(zone)
+    tm = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", txt, re.I)
+    if not tm:
+        return None
+    h = int(tm.group(1)) % 12 + (12 if tm.group(3).lower() == "pm" else 0)
+    t = now.replace(hour=h, minute=int(tm.group(2) or 0), second=0, microsecond=0)
+    dm = re.search(r"([A-Z][a-z]{2})[a-z]*\.?\s+(\d{1,2})", txt)
+    if dm:
+        t = t.replace(month=datetime.strptime(dm.group(1), "%b").month, day=int(dm.group(2)))
+        if t < now - timedelta(days=30):
+            t = t.replace(year=t.year + 1)
+    elif t <= now:
+        t += timedelta(days=1)
+    return t.timestamp()
+
+
+def _next_weekly(day, clock, now):
+    """Next `Tue 5pm` / `Fri 14:00` after `now` (tz-aware)."""
+    wd = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].index(day[:3].lower())
+    m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", clock, re.I)
+    h = int(m.group(1)) % 12 + (12 if (m.group(3) or "").lower() == "pm" else 0) if m.group(3) else int(m.group(1))
+    t = now.replace(hour=h, minute=int(m.group(2) or 0), second=0, microsecond=0) + timedelta(days=(wd - now.weekday()) % 7)
+    return t if t > now else t + timedelta(days=7)
+
+
+class Accounts:
+    """Saved Claude accounts (bash cap/auto/save_creds.sh <name>). pick() makes the first account in `order` whose
+    limit has lifted the live .credentials.json; limited() records a limit message against the live account."""
+
+    def __init__(self, log):
+        self.log, self.live = log, CONFIG_DIR / ".credentials.json"
+
+    def names(self, now=None):
+        """Priority order. `order` lines: `name` (fixed, listed order first) or `name weekly Tue 5pm` (these come after
+        the fixed ones, the account whose weekly reset is soonest first: spend quota before it expires)."""
+        have = {p.stem for p in CREDS_DIR.glob("*.json")} - {"limits"} if CREDS_DIR.is_dir() else set()
+        f = CREDS_DIR / "order"
+        fixed, weekly = [], []
+        now = now or datetime.now(ZoneInfo("America/Chicago"))
+        for line in (f.read_text().splitlines() if f.exists() else []):
+            parts = line.split()
+            if not parts or parts[0] not in have:
+                continue
+            if len(parts) >= 4 and parts[1].lower() == "weekly":
+                weekly.append((_next_weekly(parts[2], parts[3], now), parts[0]))
+            else:
+                fixed.append(parts[0])
+        ordered = fixed + [n for _, n in sorted(weekly)]
+        return ordered + sorted(have - set(ordered))
+
+    def limits(self):
+        f = CREDS_DIR / "limits.json"
+        return json.loads(f.read_text()) if f.exists() else {}
+
+    def current(self):
+        f = CREDS_DIR / "current"
+        return f.read_text().strip() if f.exists() else ""
+
+    def limited(self, msg):
+        cur = self.current()
+        if not cur:
+            return
+        lim = self.limits()
+        lim[cur] = _reset_epoch(msg) or time.time() + (24 * 3600 if "week" in msg.lower() else 5 * 3600)
+        (CREDS_DIR / "limits.json").write_text(json.dumps(lim, indent=1))
+        self.log(f"credentials: {cur} limited until {time.strftime('%m-%d %H:%M', time.localtime(lim[cur]))}: {msg[:120]!r}")
+
+    def pick(self):
+        """Returns seconds to wait before calling claude (0 when an account is available now)."""
+        names = self.names()
+        if not names or not self.live.exists():
+            return 0
+        with open(CREDS_DIR / "lock", "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            lim, now, cur = self.limits(), time.time(), self.current()
+            avail = [n for n in names if lim.get(n, 0) <= now]
+            target = avail[0] if avail else min(names, key=lambda n: lim.get(n, 0))
+            if target != cur:
+                if cur in names:
+                    shutil.copy(self.live, CREDS_DIR / f"{cur}.json")       # keep refreshed tokens
+                shutil.copy(CREDS_DIR / f"{target}.json", self.live)
+                (CREDS_DIR / "current").write_text(target)
+                self.log(f"credentials: {cur or '?'} -> {target}")
+        return 0 if avail else max(0.0, lim[target] - now)
 
 PROGRAM = '''# Assembled by the loop from plan.md + stages/NN_<name>.py{extra} -- edit the stage files, not this file.
 import traceback
@@ -167,6 +248,7 @@ def outcome(r) -> str:
 class Loop:
     def __init__(self, a, run: Path):
         self.a, self.run = a, run
+        self.accounts = Accounts(self.log)
         self.resumed = bool(a.resume)                         # only the first turn after --resume may pick up a pending experiment
         self.st = json.loads((run / "state.json").read_text()) if (run / "state.json").exists() else None
         if self.st is None:
@@ -218,9 +300,15 @@ class Loop:
         log = self.run / "log"
         (log / f"{tag}.prompt.md").write_text(prompt)
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
-        attempt, rotations = 0, 0
+        attempt = 0
         while attempt < 24:
             attempt += 1
+            wait = self.accounts.pick()
+            if wait > 0:
+                self.log(f"{tag}: every account is limited; sleeping {min(wait + 30, 3600):.0f} s")
+                time.sleep(min(wait + 30, 3600))
+                attempt -= 1
+                continue
             sid = session or str(uuid.uuid4())
             cmd = [CLAUDE, "-p", "--model", model, "--permission-mode", "acceptEdits",
                    "--allowedTools", ",".join(tools), "--disallowed-tools", ",".join(DISALLOWED),
@@ -247,13 +335,11 @@ class Loop:
                 continue
             if out.get("is_error") and _LIMIT_RE.search(result):
                 attempt -= 1                                  # usage limits do not count against the retry budget
-                n_slots = len(list(CREDS_DIR.glob("*.json"))) if CREDS_DIR.is_dir() else 0
-                if rotations < n_slots - 1 and rotate_credentials(self.log):
-                    rotations += 1
-                    continue                                  # next account, no wait
-                rotations = 0
-                self.log(f"{tag}: {result[:160]!r}; sleeping 1800 s")
-                time.sleep(1800)
+                if self.accounts.names():
+                    self.accounts.limited(result)             # pick() at the top switches or waits
+                else:
+                    self.log(f"{tag}: {result[:160]!r}; sleeping 1800 s")
+                    time.sleep(1800)
                 continue
             if out.get("is_error") and out.get("api_error_status"):
                 self.log(f"{tag}: {result[:160]!r}; sleeping 120 s")
