@@ -29,7 +29,8 @@ class PerceivedEnv(BatchedAssemblyEnv):
         task = TASKS[self.task_names[0]]
         self.perc = PartPerceiver(build_xml(task.name, visual=True), "part", task.part_asset)
         conn = Client(("127.0.0.1", port), authkey=b"fpose")
-        self.trackers = [FPoseTracker(MESH_DIR / f"{task.part_asset}.obj", track=i, conn=conn) for i in range(self.N)]
+        axial = task.part_asset.startswith(("round_peg", "rectangular_peg"))
+        self.trackers = [FPoseTracker(MESH_DIR / f"{task.part_asset}.obj", track=i, conn=conn, axial=axial) for i in range(self.N)]
         self.every = every
         self.est_p = np.tile(NO_POSE[0], (self.N, 1)); self.est_q = np.tile(NO_POSE[1], (self.N, 1))
         self.err = []                      # perception error (m) of the refreshed estimates, for logging
@@ -48,7 +49,7 @@ class PerceivedEnv(BatchedAssemblyEnv):
     def set_states(self, env_ids, states, task_ids=None):
         super().set_states(env_ids, states, task_ids)
         for i in np.atleast_1d(env_ids):
-            self.trackers[i].T_world_part, self.trackers[i].cam, self.trackers[i].stale = None, None, 0
+            self.trackers[i].T_world_part, self.trackers[i].cam, self.trackers[i].stale, self.trackers[i].lost = None, None, 0, 0
             self.est_p[i], self.est_q[i] = NO_POSE
         self._refresh(np.atleast_1d(env_ids))
 

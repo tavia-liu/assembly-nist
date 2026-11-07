@@ -400,10 +400,15 @@ class ResetGenerator:
         return None
 
     def board(self):
-        """NIST task-board start: the part dropped at a random pose and settled; robot at HOME_Q, fingers open."""
+        """NIST task-board start: the part dropped at a random pose ON THE BOARD and settled there (the loose family's
+        workspace box reaches past the board edge, onto the table); robot at HOME_Q, fingers open."""
+        from .tasks import BOARD_CENTER_WORLD_X, BOARD_HALF, BOARD_TOP_WORLD_Z
         rc = self.rcfg
+        margin = 0.03                                        # keep the drop and the settled part inside the board edge
+        lo = np.array([BOARD_CENTER_WORLD_X - BOARD_HALF + margin, -BOARD_HALF + margin])
+        hi = np.array([BOARD_CENTER_WORLD_X + BOARD_HALF - margin, BOARD_HALF - margin])
         for _ in range(50):
-            xy = self.rng.uniform(rc.part_xy_lo, rc.part_xy_hi)
+            xy = self.rng.uniform(lo, hi)
             pos = np.r_[xy, self.rng.uniform(*rc.part_drop_z)]
             quat = random_quat(self.rng)
             self._set(HOME_Q, FINGER_OPEN, pos, quat, FINGER_OPEN)
@@ -411,7 +416,10 @@ class ResetGenerator:
                 continue
             if not self._settle(600) or not self._part_in_bounds() or self._robot_contact():
                 continue
-            if self._max_penetration() < rc.penetration_tol:
+            p = self.d.qpos[self.ix.part_qpos:self.ix.part_qpos + 3]
+            on_board = (abs(p[0] - BOARD_CENTER_WORLD_X) < BOARD_HALF - 0.01 and abs(p[1]) < BOARD_HALF - 0.01
+                        and p[2] > BOARD_TOP_WORLD_Z - 0.005)
+            if on_board and self._max_penetration() < rc.penetration_tol:
                 return self._state()
         return None
 

@@ -9,7 +9,7 @@ python -u cap/fpose_server.py --port $FPOSE_PORT > cap/runs/slurm/fpose_server_$
 SRV=$!
 for i in $(seq 1 120); do grep -q listening cap/runs/slurm/fpose_server_$SLURM_JOB_ID.log 2>/dev/null && break; sleep 2; done
 conda deactivate
-export PYTHONPATH=.:cap MUJOCO_GL=egl CAP_TRACKER=fpose CAP_CAM_RES=640x480
+export PYTHONPATH=.:cap MUJOCO_GL=egl CAP_TRACKER=fpose CAP_CAM_RES=1280x960 CAP_WRIST_RES=320x240
 for T in R8 P4; do .venv/bin/python -u cap/perception_check.py $T 3; done
 kill $SRV
 tail -n 5 cap/runs/slurm/fpose_server_$SLURM_JOB_ID.log

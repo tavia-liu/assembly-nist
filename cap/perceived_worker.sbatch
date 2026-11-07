@@ -20,6 +20,6 @@ python -u cap/fpose_server.py --port $FPOSE_PORT > cap/runs/slurm/fpose_server_$
 SRV=$!
 for i in $(seq 1 150); do grep -q listening cap/runs/slurm/fpose_server_$SLURM_JOB_ID.log 2>/dev/null && break; sleep 2; done
 conda deactivate
-export PYTHONPATH=.:cap MUJOCO_GL=egl CAP_TRACKER=fpose CAP_CAM_RES=640x480 CAP_TRACK_EVERY=${TRACK_EVERY:-2}
+export PYTHONPATH=.:cap MUJOCO_GL=egl CAP_TRACKER=fpose CAP_CAM_RES=1280x960 CAP_WRIST_RES=320x240 CAP_TRACK_EVERY=${TRACK_EVERY:-2}
 .venv/bin/python -u cap/perceived_worker.py --run-dir "${RUN_DIR:?}" --nthread "$SLURM_CPUS_PER_TASK"
 kill $SRV
