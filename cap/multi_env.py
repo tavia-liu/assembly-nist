@@ -49,9 +49,9 @@ class MultiIndices:
 class MultiModel:
     """assembly_policy.sim.env.TaskModel for the multi-part scene."""
 
-    def __init__(self, tasks, pcfg: PhysicsConfig, nthread):
+    def __init__(self, tasks, pcfg: PhysicsConfig, nthread, physics_of=None):
         self.tasks, self.name = list(tasks), "+".join(tasks)
-        self.model = mujoco.MjModel.from_xml_string(build_multi_xml(tasks, pcfg))
+        self.model = mujoco.MjModel.from_xml_string(build_multi_xml(tasks, pcfg, physics_of=physics_of))
         self.datas = [mujoco.MjData(self.model) for _ in range(nthread)]
         self.idx = MultiIndices(self.model, tasks)
         self.fk = FrankaFK(self.model)
@@ -75,13 +75,16 @@ class MultiModel:
 
 
 class MultiPartEnv(BatchedAssemblyEnv):
-    def __init__(self, tasks, ecfg: EnvConfig | None = None, pcfg: PhysicsConfig | None = None):
+    def __init__(self, tasks, ecfg: EnvConfig | None = None, pcfg: PhysicsConfig | None = None, n_envs: int = 1,
+                 active: str | None = None, physics_of: str | None = None):
+        """n_envs copies of the same scene (training); `active` = the part every env works on (default tasks[0]);
+        physics_of = the task whose physics the whole scene uses (default: the finest needed)."""
         self.ecfg = ecfg or EnvConfig()
         self.pcfg = pcfg or PhysicsConfig(fine_families=self.ecfg.fine_families,
                                           fine_sdf_initpoints=self.ecfg.fine_sdf_initpoints,
                                           fine_sdf_iterations=self.ecfg.fine_sdf_iterations)
         self.tasks = list(tasks)
-        self.models = [MultiModel(self.tasks, self.pcfg, self.ecfg.nthread)]
+        self.models = [MultiModel(self.tasks, self.pcfg, self.ecfg.nthread, physics_of=physics_of)]
         m0 = self.models[0].model
         self.nstate = mujoco.mj_stateSize(m0, STATE_SPEC)
         self.idx = self.models[0].idx
@@ -89,13 +92,13 @@ class MultiPartEnv(BatchedAssemblyEnv):
         self.dt_k = np.array([self.substeps_k[0] * m0.opt.timestep])
         self.substeps = self.substeps_k[0]
         self.horizon = int(round(self.ecfg.horizon_s / self.ecfg.control_dt))
-        self.N = 1
-        self.task = np.zeros(1, dtype=np.int64)
-        self.state = np.zeros((1, self.nstate))
-        self.prev_action = np.zeros((1, 8))
-        self.grip_cmd = np.zeros(1)
-        self.hist = np.zeros((1, HISTORY, PROPRIO_DIM), dtype=np.float32)
-        self.t = np.zeros(1, dtype=np.int64)
+        self.N = int(n_envs)
+        self.task = np.zeros(self.N, dtype=np.int64)
+        self.state = np.zeros((self.N, self.nstate))
+        self.prev_action = np.zeros((self.N, 8))
+        self.grip_cmd = np.zeros(self.N)
+        self.hist = np.zeros((self.N, HISTORY, PROPRIO_DIM), dtype=np.float32)
+        self.t = np.zeros(self.N, dtype=np.int64)
         self.pool = ThreadPoolExecutor(self.ecfg.nthread) if self.ecfg.nthread > 1 else None
         self._tls = threading.local()
         self.vlim = np.asarray(VELOCITY_LIMIT) * self.ecfg.velocity_limit_scale
@@ -106,7 +109,7 @@ class MultiPartEnv(BatchedAssemblyEnv):
         self.sf = 1 + self.idx.finger_qpos
         self.sqd = 1 + self.nq + self.idx.arm_dof
         self.scoring = True          # False: step() never reports success (code finishing / recovery moves)
-        self.set_active(self.tasks[0])
+        self.set_active(active or self.tasks[0])
 
     # ------------------------------------------------------------- parts
     def part_slices(self, t):
@@ -139,6 +142,23 @@ class MultiPartEnv(BatchedAssemblyEnv):
         return self.models[0].fk.forward(self.state[:, self.sq])["tcp_p"][0].copy()
 
     # ------------------------------------------------------------- reset
+    def set_states(self, env_ids, states, task_ids=None):
+        super().set_states(env_ids, states, None)
+
+    def compose(self, part_states, sp_single, robot=None):
+        """A full state: robot at home with the gripper open (or `robot` = a single-task state whose arm, fingers
+        and part pose are copied for the active part) and each part of part_states at its single-task pose."""
+        s = np.zeros(self.nstate)
+        s[self.sq] = HOME_Q
+        s[self.sf] = FINGER_OPEN
+        for t, st in part_states.items():
+            s[self.part_slices(t)[0]] = np.asarray(st)[sp_single]
+        if robot is not None:
+            robot = np.asarray(robot)
+            s[self.sq], s[self.sf] = robot[self.sq], robot[self.sf]
+            s[self.sp] = robot[sp_single]
+        return s
+
     def reset_board(self, part_states, sp_single, settle_s=1.0):
         """Robot at home with the gripper open, each part at the pose of its single-task start state
         (part_states[t], read at the single-task part slice sp_single), settled for settle_s seconds."""

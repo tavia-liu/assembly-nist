@@ -51,7 +51,9 @@ simulator. An episode ends with SUCCESS when the part reaches the target pose (b
 within 1 mm), TIMEOUT after 15 s, SAFETY if a joint exceeds its velocity limit, or FAILURE on an
 exception in your code.
 
-Each episode starts with the part at a random pose on the board and the gripper open. You are
+Each episode starts with the part at a random pose on the board and the gripper open. The robot
+has two cameras (a fixed one over the board and one on the wrist) and no other knowledge of where the
+part is: use api.camera() and write your own vision, or api.locate_part(), the tracker built on them. You are
 scored on held-out starts you never see, by success rate and completion time. Write one program
 that decides from `api.observe()`; never special-case a start or hard-code numbers taken from a
 trace.

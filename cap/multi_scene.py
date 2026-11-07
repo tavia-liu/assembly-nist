@@ -9,10 +9,11 @@ are dropped for every gear that is a movable part of the scene.
 """
 from __future__ import annotations
 
+import dataclasses
 import xml.etree.ElementTree as ET
 
 from assembly_policy.sim.gears import GEARS, gear_base_geoms, gear_convex_pieces
-from assembly_policy.sim.scene import PhysicsConfig, build_xml
+from assembly_policy.sim.scene import PhysicsConfig, build_xml, task_physics
 from assembly_policy.sim.tasks import TASKS
 
 
@@ -64,13 +65,19 @@ def _prune_gear_base(root, t, gear_parts):
         k += n
 
 
-def build_multi_xml(tasks, cfg: PhysicsConfig | None = None, visual: bool = False) -> str:
+def build_multi_xml(tasks, cfg: PhysicsConfig | None = None, visual: bool = False, physics_of: str | None = None) -> str:
+    """physics_of=<task>: the whole scene uses that task's physics (its timestep and contact parameters; the other
+    parts are obstacles only) -- e.g. a coarse 2.5 ms scene for training on P4 with gears and nuts lying around."""
     tasks = list(tasks)
     assert len(set(tasks)) == len(tasks), tasks
     gear_parts = {TASKS[t].part_asset for t in tasks if TASKS[t].family == "gear"}
     cfg = cfg or PhysicsConfig(fine_families="gear+nut")
-    fine = {f for f in cfg.fine_families.replace(",", "+").split("+") if f}
-    base = next((t for t in tasks if TASKS[t].family in fine), tasks[0])
+    if physics_of is not None:
+        cfg = dataclasses.replace(task_physics(physics_of, cfg), fine_families="")
+        base = physics_of
+    else:
+        fine = {f for f in cfg.fine_families.replace(",", "+").split("+") if f}
+        base = next((t for t in tasks if TASKS[t].family in fine), tasks[0])
     roots = {t: ET.fromstring(build_xml(t, cfg, visual)) for t in tasks}
     root = roots[base]
     root.set("model", "assemblenist_" + "_".join(tasks))

@@ -22,9 +22,25 @@ ROOT = Path(assembly_policy.__file__).resolve().parents[1]          # the repo, 
 DEFAULT_CKPT = Path(os.environ.get("CAP_RL_CKPT", ROOT / "checkpoints/e8192_it12500.pt"))
 
 
+class _EnvView:
+    """env.observe() with the part pose the policy may know (the camera estimate), for TorchPolicy."""
+
+    def __init__(self, api):
+        self.api = api
+
+    def observe(self):
+        o = self.api.env.observe()
+        pp, pq, _ = self.api._part_pose()
+        if np.isfinite(pp).all():
+            o["part_p"] = pp.astype(np.float32)[None]
+            o["part_q"] = pq.astype(np.float32)[None]
+        return o
+
+
 class RLSkill:
     def __init__(self, api, ckpt=DEFAULT_CKPT, deterministic=False, seed=0):
         self.api = api
+        self.view = _EnvView(api)
         self.pol = TorchPolicy(str(ckpt), [api.task.name], "cpu", deterministic=deterministic)
         torch.manual_seed(seed)
 
@@ -35,7 +51,7 @@ class RLSkill:
         o = None
         try:
             for i in range(n):
-                a = self.pol(api.env)[0]
+                a = self.pol(self.view)[0]
                 o = api.step(a)
                 if stop is not None and stop(o):
                     break

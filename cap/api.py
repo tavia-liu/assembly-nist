@@ -22,19 +22,25 @@ is told it may call cannot drift from what it is actually allowed to call.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import mujoco
 
 from assembly_policy.sim.env import STATE_SPEC, BatchedAssemblyEnv, EnvConfig
 from assembly_policy.sim.resets import ResetGenerator, any_grasp
 from assembly_policy.sim.robot import mat_to_quat, quat_mul, quat_to_mat, solve_ik
+from assembly_policy.sim.scene import build_xml
 from assembly_policy.sim.tasks import TASKS, scene_pose
+
+# "camera": part pose from the two-camera tracker (cap/perception.py); "oracle": the simulator's pose (ablation)
+PERCEPTION = os.environ.get("CAP_PERCEPTION", "camera")
 
 LEVELS = ("raw", "kin", "grasp")
 
 # method -> lowest level at which it may be called
 _LEVEL_OF = {
-    "observe": "raw", "step": "raw", "constants": "raw",
+    "observe": "raw", "step": "raw", "constants": "raw", "camera": "raw", "locate_part": "grasp",
     "ik": "kin", "move_to": "kin", "move_to_joints": "kin", "set_gripper": "kin", "wait": "kin",
     "grasp_candidates": "grasp",
 }
@@ -75,6 +81,37 @@ class AssemblyAPI:
         # servo step would re-open the fingers and drop the part
         self.grip_open = bool(env.grip_cmd[0] > 0)
         self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
+        self.perception = PERCEPTION
+        self._perc, self._perc_cache, self._views_cache, self._perc_err = None, None, None, []
+        if self.perception == "camera":
+            from perception import PartPerceiver
+            if hasattr(env, "tasks"):                                   # multi-part board (cap/multi_env.py)
+                from multi_scene import build_multi_xml
+                xml, body = build_multi_xml(env.tasks, visual=True), f"part_{self.task.name}"
+            else:
+                xml, body = build_xml(self.task.name, visual=True), "part"
+            self._perc = PartPerceiver(xml, body, self.task.part_asset)
+
+    def _part_pose(self):
+        """(pos, quat) of the part as the policy may know it: the camera estimate, or the simulator's in oracle mode."""
+        s = self.env.state[0]
+        true_p, true_q = s[self.env.sp[:3]].copy(), s[self.env.sp[3:7]].copy()
+        if self._perc is None:
+            return true_p, true_q, None
+        if self._perc_cache is None or self._perc_cache[0] != int(self.env.t[0]):
+            pos, quat, conf = self._perc.estimate(s, self._views())
+            if pos is None:                                             # never seen: no pose
+                pos, quat = np.full(3, np.nan), np.full(4, np.nan)
+            else:
+                self._perc_err.append(float(np.linalg.norm(pos - true_p)))
+            self._perc_cache = (int(self.env.t[0]), pos, quat, conf)
+        return self._perc_cache[1].copy(), self._perc_cache[2].copy(), dict(self._perc_cache[3])
+
+    def _views(self):
+        """The two camera images at this control step (rendered once per step)."""
+        if self._views_cache is None or self._views_cache[0] != int(self.env.t[0]):
+            self._views_cache = (int(self.env.t[0]), self._perc.capture(self.env.state[0]))
+        return self._views_cache[1]
 
     # ------------------------------------------------------------------ enforcement
     def _require(self, name):
@@ -87,8 +124,10 @@ class AssemblyAPI:
         s = self.env.state[0]
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
         _, wrench = self._external_load(self._jacobian())
+        pp, _, conf = self._part_pose()
         e = dict(t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2), call=call, **kw,
-                 tcp=np.round(fk["tcp_p"][0], 4).tolist(), part=np.round(s[self.env.sp[:3]], 4).tolist(),
+                 tcp=np.round(fk["tcp_p"][0], 4).tolist(), part=np.round(pp, 4).tolist(),
+                 **({"part_seen": [conf["n_points"], conf["rms_mm"], conf["stale"]]} if conf else {}),
                  grip=round(float(s[self.env.sf].sum()), 4), wrench=np.round(wrench, 1).tolist())
         if self.frames is not None:
             self.key_states.append(s.copy())
@@ -107,7 +146,8 @@ class AssemblyAPI:
                     task=self.task.name, family=self.task.family)
 
     def observe(self):
-        """State of the episode, limited to what a real robot cell reports.
+        """Robot state, limited to what a real robot cell reports. The part is NOT in here: it is seen
+        only through the cameras (camera()) or the tracker built on them (locate_part()).
 
         pos are metres in the world frame, quat are (w,x,y,z). `goal_*` is the pose the part
         must reach (success_threshold_m on both of its keypoints). `tcp` is the fingertip
@@ -122,11 +162,12 @@ class AssemblyAPI:
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
         J = self._jacobian()
         tau_ext, wrench = self._external_load(J)
+        oracle = {} if self._perc is not None else dict(part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy())
         return dict(
             t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2),
             time_left=round(float(self.env.horizon - self.env.t[0]) * self.env.ecfg.control_dt, 2),
             tcp_pos=fk["tcp_p"][0].copy(), tcp_quat=mat_to_quat(fk["tcp_R"][:1])[0],
-            part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy(),
+            **oracle,
             goal_pos=self._goal_pos.copy(), goal_quat=self._goal_quat.copy(),
             joints=s[self.env.sq].copy(), joint_vel=s[self.env.sqd].copy(),
             gripper_width=float(s[self.env.sf].sum()),
@@ -135,6 +176,29 @@ class AssemblyAPI:
             tcp_jacobian=J,
             joint_torque_ext=tau_ext, tcp_wrench_ext=wrench,
         )
+
+    def camera(self):
+        """The two cameras at this control step: dict(global=..., wrist=...), each dict(rgb [H,W,3] uint8,
+        depth [H,W] metres along the optical axis, mask [H,W] bool = the part's instance mask (a segmentation
+        model's output), K 3x3 intrinsics, cam_pos [3], cam_R [3,3] camera-to-world). `global` is fixed over the
+        board, `wrist` rides on the hand looking along the fingers. A pixel (u,v) with depth d is at
+        cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world. 320x240, no noise."""
+        self._require("camera")
+        if self._perc is None:
+            raise RuntimeError("camera() needs CAP_PERCEPTION=camera")
+        return {n: dict(v) for n, v in self._views().items()}
+
+    def locate_part(self):
+        """Pose of the part from the two cameras (depth + mask -> points, ICP on the part's CAD model, tracked
+        from step to step): (pos [3], quat [4], conf) with conf = dict(n_points seen, rms_mm fit residual,
+        stale = steps since the part was last seen, views = points per camera). pos/quat are None until the part
+        has been seen once; while it is hidden the last estimate is returned (stale > 0). A few mm / degrees
+        off when the part is far from the wrist camera or mostly hidden; symmetric parts have an arbitrary roll."""
+        self._require("locate_part")
+        pp, pq, conf = self._part_pose()
+        if not np.isfinite(pp).all():
+            return None, None, conf
+        return pp, pq, conf
 
     def _external_load(self, J):
         """External joint torques from the constraint solver and the TCP wrench they imply.
@@ -243,8 +307,8 @@ class AssemblyAPI:
             self._step(a)
 
     # ------------------------------------------------------------------ grasp
-    def grasp_candidates(self, n=32):
-        """n antipodal grasp candidates for the part at its CURRENT pose.
+    def grasp_candidates(self, part_pos, part_quat, n=32):
+        """n antipodal grasp candidates for the part at the pose YOU pass (e.g. from locate_part()).
 
         Each is dict(pos, quat, half_width): the world TCP pose at which closing the gripper
         grasps the part, and the part's half-width along the closing axis. Candidates are
@@ -252,8 +316,7 @@ class AssemblyAPI:
         follows. Sampling is i.i.d.; call again for more.
         """
         self._require("grasp_candidates")
-        s = self.env.state[0]
-        pp, pq = s[self.env.sp[:3]].copy(), s[self.env.sp[3:7]].copy()
+        pp, pq = np.asarray(part_pos, float).reshape(3), np.asarray(part_quat, float).reshape(4)
         Rp = quat_to_mat(pq)
         out = []
         for _ in range(n):
@@ -275,7 +338,11 @@ class AssemblyAPI:
             self.done = True
             self.outcome = dict(success=bool(info["success"][0]), safety=bool(info["safety"][0]),
                                 timeout=bool(info["timeout"][0]), d_asm=float(info["d_asm"][0]),
-                                steps=int(self.env.t[0]))
+                                steps=int(self.env.t[0]), perception=self.perception,
+                                perception_err_mm=(dict(mean=round(1000 * float(np.mean(self._perc_err)), 2),
+                                                        p90=round(1000 * float(np.percentile(self._perc_err, 90)), 2),
+                                                        max=round(1000 * float(np.max(self._perc_err)), 2), n=len(self._perc_err))
+                                                   if self._perc_err else None))
             raise EpisodeOver()
         return self.observe()
 
@@ -293,7 +360,8 @@ def spec(level="grasp"):
         sig = sig.split(" -> ")[0]
         lines.append(f"  api.{name}{sig}\n      {doc}")
     lines += ["", "Calling anything else raises LevelError. There is no insert/align/reorient/screw "
-                  "primitive; the assembly strategy is yours to compute.",
+                  "primitive; the assembly strategy is yours to compute. The part's pose is never given: see it "
+                  "through camera() (write your own vision on the images) or locate_part() (the provided tracker).",
               "`api.EpisodeOver` is raised as soon as the episode ends -- let it propagate."]
     return "\n".join(lines)
 

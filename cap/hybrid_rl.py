@@ -28,8 +28,12 @@ def _ok_q(api, q):
 def pregrasp(api, n=64):
     """Reachable pre-grasp (pos, quat, joints) above the part, approach as close to straight down as possible."""
     o = api.observe()
+    pp, pq, conf = api.locate_part()
+    if pp is None:
+        print("[hybrid] part not seen by either camera", flush=True)
+        return None
     best = None
-    for c in api.grasp_candidates(n):
+    for c in api.grasp_candidates(pp, pq, n):
         a = quat_to_mat(c["quat"])[:, 2]          # approach direction (palm -> fingertips)
         down = -a[2]
         if down < 0.5:                             # more than 60 deg from vertical
