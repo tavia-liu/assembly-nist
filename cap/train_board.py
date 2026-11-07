@@ -1,7 +1,7 @@
 """PPO from scratch on the full board: all 20 parts physical, one active part, episodes from the near20 bank.
 
-Same trainer as assembly_policy.train (point-cloud observation of the active part, binary reward, beta reset sampler);
-only the simulator is the multi-part scene (cap/multi_env.py) and the bank is data/banks_near20/<task>_train.npz.
+Same trainer as assembly_policy.train (point-cloud observation of the active part, binary reward); the reset bank is
+data/banks_near20/<task>_train.npz (near starts only, sampled uniformly) and the simulator is the multi-part scene.
 
   PYTHONPATH=.:cap python cap/train_board.py --task P4 --run-dir runs/board_P4 --envs 512 --iters 3000
 """
@@ -40,7 +40,9 @@ def main():
         i = argv.index("--task"); task = argv[i + 1]; argv = argv[:i] + argv[i + 2:]
     else:
         task = "P4"
-    argv = ["--tasks", task, "--bank-dir", "data/banks_near20", "--no-eval", "--remote-workers", "0"] + argv
+    # near starts only, drawn uniformly (no beta reset sampler); later flags on the command line override these
+    argv = ["--tasks", task, "--bank-dir", "data/banks_near20", "--sampler", "uniform", "--no-eval",
+            "--remote-workers", "0"] + argv
     T.LocalVecEnv = BoardVecEnv
     a = T.parse(argv)
     print(f"[train_board] scene {SCENE}, active part {task}, {a.envs} envs", flush=True)

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import xml.etree.ElementTree as ET
+from multiprocessing.connection import Client
 
 import mujoco
 import numpy as np
@@ -23,11 +25,13 @@ from scipy.spatial import cKDTree
 from assembly_policy.rl.obs import sample_surface
 from assembly_policy.sim.env import STATE_SPEC
 from assembly_policy.sim.robot import mat_to_quat, quat_to_mat
-from assembly_policy.sim.tasks import load_obj
+from assembly_policy.sim.tasks import MESH_DIR, load_obj
 
 GLOBAL_CAM = dict(pos=(0.98, -0.62, 0.78), lookat=(0.50, 0.0, 0.03), fovy=42.0)   # front-right of the board
 WRIST_CAM = dict(pos="0.05 0 0", quat="0 0.707108 0.707108 0", fovy="75")           # robosuite eye_in_hand
-W, H = 320, 240
+W, H = (int(v) for v in os.environ.get("CAP_CAM_RES", "640x480").split("x"))
+TRACKER = os.environ.get("CAP_TRACKER", "icp")          # icp (built in) | fpose (FoundationPose server, cap/fpose_server.py)
+FPOSE_PORT = int(os.environ.get("FPOSE_PORT", "8130"))
 N_MODEL = 600          # surface samples of the CAD mesh
 N_OBS = 1500           # observed points kept per estimate
 MIN_PTS = 25           # fewer visible pixels: the last estimate is kept (stale)
@@ -83,6 +87,51 @@ def _rotations():
 ROTATIONS = _rotations()
 
 
+class FPoseTracker:
+    """Client of cap/fpose_server.py (FoundationPose in its own conda env): register on the first sighting with
+    the mask, then track_one per step; the track follows the camera that sees the part best (wrist when it sees
+    enough of it, else the fixed camera) and is re-seeded in the other camera's frame on a switch."""
+    F = np.diag([1.0, -1.0, -1.0])        # MuJoCo camera (x right, y up, z back) -> CV camera (x right, y down, z forward)
+
+    def __init__(self, mesh_path, port=FPOSE_PORT, min_px=(300, 60)):
+        self.conn = Client(("127.0.0.1", port), authkey=b"fpose")
+        self.mesh = str(mesh_path)
+        self.min_px = dict(wrist=min_px[0], **{"global": min_px[1]})
+        self.T_world_part, self.cam, self.stale = None, None, 0
+
+    def _call(self, **req):
+        self.conn.send(dict(mesh=self.mesh, **req))
+        r = self.conn.recv()
+        if "error" in r:
+            raise RuntimeError(r["error"])
+        return r["pose"]
+
+    @classmethod
+    def cv_pose(cls, view):
+        """T_world<-cv_cam and its inverse for a captured view."""
+        Rw = view["cam_R"] @ cls.F
+        T = np.eye(4); T[:3, :3] = Rw; T[:3, 3] = view["cam_pos"]
+        Ti = np.eye(4); Ti[:3, :3] = Rw.T; Ti[:3, 3] = -Rw.T @ view["cam_pos"]
+        return T, Ti
+
+    def estimate(self, views):
+        px = {n: int(v["mask"].sum()) for n, v in views.items()}
+        cam = "wrist" if px["wrist"] >= self.min_px["wrist"] else ("global" if px["global"] >= self.min_px["global"] else None)
+        if cam is None:
+            self.stale += 1
+            return self.T_world_part, dict(n_points=max(px.values()), rms_mm=None, stale=self.stale, views=px, cam=None)
+        v = views[cam]
+        depth = np.where(v["depth"] < 2.5, v["depth"], 0.0).astype(np.float32)
+        T_wc, T_cw = self.cv_pose(v)
+        if self.T_world_part is None or (self.cam != cam and self.stale > 5):
+            T_cp = self._call(cmd="register", K=v["K"], rgb=v["rgb"], depth=depth, mask=v["mask"])
+        else:
+            init = None if self.cam == cam else (T_cw @ self.T_world_part)        # same track, other camera
+            T_cp = self._call(cmd="track", K=v["K"], rgb=v["rgb"], depth=depth, init_pose=init)
+        self.T_world_part, self.cam, self.stale = T_wc @ np.asarray(T_cp), cam, 0
+        return self.T_world_part, dict(n_points=px[cam], rms_mm=None, stale=0, views=px, cam=cam)
+
+
 class PartPerceiver:
     def __init__(self, xml: str, part_body: str = "part", part_mesh: str = "", w=W, h=H, seed=0):
         key = hashlib.sha1(xml.encode()).hexdigest()
@@ -99,6 +148,7 @@ class PartPerceiver:
         self.tree = cKDTree(self.model_pts)
         self.rng = np.random.default_rng(seed)
         self.R, self.t, self.stale, self.rms = None, None, 0, None
+        self.fpose = FPoseTracker(MESH_DIR / f"{part_mesh}.obj") if TRACKER == "fpose" else None
 
     # ------------------------------------------------------------- cameras
     def _view(self, cam_id):
@@ -149,6 +199,11 @@ class PartPerceiver:
     def estimate(self, state, views=None):
         """(pos, quat, conf) of the part from the two cameras; pos/quat None until the part has been seen once."""
         views = views if views is not None else self.capture(state)
+        if self.fpose is not None:
+            T, conf = self.fpose.estimate(views)
+            if T is None:
+                return None, None, conf
+            return T[:3, 3].copy(), mat_to_quat(T[:3, :3][None])[0], conf
         pts = {n: self.points(v) for n, v in views.items()}
         obs = np.concatenate(list(pts.values())) if any(len(p) for p in pts.values()) else np.zeros((0, 3))
         if len(obs) > N_OBS:
@@ -172,3 +227,5 @@ class PartPerceiver:
 
     def reset(self):
         self.R, self.t, self.stale, self.rms = None, None, 0, None
+        if self.fpose is not None:
+            self.fpose.T_world_part, self.fpose.cam, self.fpose.stale = None, None, 0

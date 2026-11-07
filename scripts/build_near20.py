@@ -31,19 +31,21 @@ from multi_env import MultiPartEnv                             # noqa: E402
 from multi_part import choose_layout                           # noqa: E402
 
 
-def contacts_bad(m, d, env, active_body, part_bodies):
-    """True if the robot or the held part touches another part, or any two parts touch."""
-    robot = set(range(1, m.nbody)) - set(part_bodies.values())
+ROBOT_BODIES = ("link0", "link1", "link2", "link3", "link4", "link5", "link6", "link7", "hand", "left_finger", "right_finger")
+
+
+def robot_body_ids(m):
+    return {mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, n) for n in ROBOT_BODIES} - {-1}
+
+
+def contacts_bad(m, d, robot, active_body, other_parts):
+    """True if the arm, the hand or the held part touches one of the other parts. Loose parts resting against each
+    other, the board or a fixture are fine."""
+    mine = robot | {active_body}
     for i in range(d.ncon):
         c = d.contact[i]
         b1, b2 = m.geom_bodyid[c.geom1], m.geom_bodyid[c.geom2]
-        parts = [b for b in (b1, b2) if b in part_bodies.values() and b != active_body]
-        if not parts:
-            continue
-        other = b2 if b1 in parts else b1
-        if other in robot or other == active_body or other in part_bodies.values():
-            if other == 0:                                     # world (board / fixtures): fine
-                continue
+        if (b1 in mine and b2 in other_parts) or (b2 in mine and b1 in other_parts):
             return True
     return False
 
@@ -69,6 +71,9 @@ def main():
     d = mujoco.MjData(m)
     e1 = api.make_env(T); sp1 = e1.sp.copy(); e1.close()
     part_bodies = {t: env.idx.part_body_of[t] for t in tasks}
+    robot = robot_body_ids(m)
+    other_parts = {part_bodies[t] for t in others}
+    rejected = dict(held=0, moved=0, fell=0, contact=0)
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     for split, n_want in (("train", a.n_train), ("eval", a.n_eval)):
         z = np.load(Path(a.near_bank) / f"{T}_{split}.npz")
@@ -92,15 +97,23 @@ def main():
                 tries += 1
                 s = env.state[i]
                 mujoco.mj_setState(m, d, s, mujoco.mjtState.mjSTATE_FULLPHYSICS); mujoco.mj_forward(m, d)
-                held = 0.002 < s[env.sf].sum() < 0.075
-                near_goal = float(env.assembly_distance(T)[0]) < 0.08 if False else True
+                held = -0.004 < s[env.sf].sum() < 0.075      # fingers at the part (P4: ~0.0006), not slammed shut (-0.02)
                 d_act = np.linalg.norm(s[env.sp[:3]] - z["states"][j][sp1[:3]])
                 z_ok = all(s[env.part_slices(t)[0][2]] > -0.02 for t in tasks)
-                if held and d_act < 0.01 and z_ok and not contacts_bad(m, d, env, part_bodies[T], part_bodies):
+                bad = contacts_bad(m, d, robot, part_bodies[T], other_parts)
+                if not held:
+                    rejected["held"] += 1
+                elif d_act >= 0.01:
+                    rejected["moved"] += 1
+                elif not z_ok:
+                    rejected["fell"] += 1
+                elif bad:
+                    rejected["contact"] += 1
+                else:
                     states.append(s.copy()); levels.append(float(z["level"][j])); src.append(int(j))
                 if len(states) >= n_want:
                     break
-            print(f"{T} {split}: {len(states)}/{n_want} kept of {tries} tried  [{time.time() - t0:.0f} s]", flush=True)
+            print(f"{T} {split}: {len(states)}/{n_want} kept of {tries} tried  rejected {rejected}  [{time.time() - t0:.0f} s]", flush=True)
         S = np.stack(states[:n_want])
         np.savez_compressed(out / f"{T}_{split}.npz", states=S, family=np.full(len(S), FAMILIES.index("near")),
                             level=np.asarray(levels[:n_want]), source=np.asarray(src[:n_want]))
