@@ -152,6 +152,8 @@ class Loop:
             self.setup()
         self.schedule = self.st["schedule"]
         T.RUN = run
+        if not (run / "policy.py").exists():
+            build_policy(run)                                 # an empty policy.py until the coder writes stages
         self.env = api.make_env(self.st["task"], horizon_s=self.st["horizon_s"])
         self.vis = T.make_vis(self.st["task"])
         self.dt = self.env.ecfg.control_dt
@@ -453,9 +455,18 @@ class Loop:
         return text, accepted
 
     # ----- the whole run
+    def pending_turn(self, text, tag):
+        """A resumed run first finishes an experiment the coder asked for; otherwise it (re)sends `text`."""
+        name = self.unrun_experiment() if self.st["session"] else None
+        if name:
+            self.log(f"resume: running the pending experiment {name}")
+            self.coder_turn(self.run_experiment(name), f"{tag}_resume")
+        else:
+            self.coder_turn(text, tag)
+
     def run_loop(self):
         if self.st["phase"] == "brief":
-            self.coder_turn((self.run / "BRIEF.md").read_text(), "brief")
+            self.pending_turn((self.run / "BRIEF.md").read_text(), "brief")
             self.save(phase="rollout")
         while self.st["phase"] != "done":
             if self.st["phase"] == "rollout":
@@ -465,8 +476,8 @@ class Loop:
             else:                                             # "coder": the report of the last round is pending
                 rnd = self.st["round"]
                 last = rnd >= self.st["max_rounds"]
-                self.coder_turn((self.run / "rounds" / f"r{rnd:02d}" / "report.md").read_text(),
-                                "final" if last else f"r{rnd:02d}")
+                self.pending_turn((self.run / "rounds" / f"r{rnd:02d}" / "report.md").read_text(),
+                                  "final" if last else f"r{rnd:02d}")
                 self.save(phase="done" if last else "rollout")
 
     def evaluate(self):
