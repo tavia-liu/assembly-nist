@@ -23,8 +23,13 @@ NO_POSE = (np.array([0.5, 0.0, -1.0], np.float32), np.array([1.0, 0.0, 0.0, 0.0]
 
 
 class PerceivedEnv(BatchedAssemblyEnv):
-    def __init__(self, task_names, task_of_env, ecfg=None, pcfg=None, every=2, port=FPOSE_PORT):
+    def __init__(self, task_names, task_of_env, ecfg=None, pcfg=None, every=2, port=FPOSE_PORT, mode="track"):
+        """mode: 'track' = the tracker runs every `every` control steps; 'anchor' = one estimate at the start of the
+        episode (the part in the hand, in full view), then the pose follows the hand kinematically (part fixed in
+        the fingers) -- what a cell without in-loop tracking would do."""
         super().__init__(task_names, task_of_env, ecfg, pcfg)
+        self.mode = mode
+        self.T_rel = [None] * len(task_of_env)              # anchor: T_tcp<-part at the start
         assert len(self.task_names) == 1, "one part per perceived env"
         task = TASKS[self.task_names[0]]
         self.perc = PartPerceiver(build_xml(task.name, visual=True), "part", task.part_asset)
@@ -45,6 +50,8 @@ class PerceivedEnv(BatchedAssemblyEnv):
             if T is not None:
                 self.est_p[i], self.est_q[i] = T[:3, 3], _mat_to_quat(T[:3, :3])
                 self.err.append(float(np.linalg.norm(self.est_p[i] - self.state[i, self.sp[:3]])))
+                T_tcp = np.eye(4); T_tcp[:3, :3] = fk["tcp_R"][j]; T_tcp[:3, 3] = fk["tcp_p"][j]
+                self.T_rel[i] = np.linalg.inv(T_tcp) @ T
         self.stats["calls"] += len(ids); self.stats["time"] += time.perf_counter() - t0
 
     def set_states(self, env_ids, states, task_ids=None):
@@ -54,10 +61,23 @@ class PerceivedEnv(BatchedAssemblyEnv):
             self.est_p[i], self.est_q[i] = NO_POSE
         self._refresh(np.atleast_1d(env_ids))
 
+    def _propagate(self):
+        """anchor mode: the part moves with the hand."""
+        fk = self.models[0].fk.forward(self.state[:, self.sq])
+        for i in range(self.N):
+            if self.T_rel[i] is None:
+                continue
+            T_tcp = np.eye(4); T_tcp[:3, :3] = fk["tcp_R"][i]; T_tcp[:3, 3] = fk["tcp_p"][i]
+            T = T_tcp @ self.T_rel[i]
+            self.est_p[i], self.est_q[i] = T[:3, 3], _mat_to_quat(T[:3, :3])
+            self.err.append(float(np.linalg.norm(self.est_p[i] - self.state[i, self.sp[:3]])))
+
     def step(self, action):
         out = super().step(action)
-        due = np.nonzero(self.t % self.every == 0)[0]
-        self._refresh(due)
+        if self.mode == "anchor":
+            self._propagate()
+        else:
+            self._refresh(np.nonzero(self.t % self.every == 0)[0])
         return out
 
     def observe(self):

@@ -122,6 +122,13 @@ class Trainer:
         self.ecfg = EnvConfig(nthread=a.nthread, cost_coef=a.cost_coef, action_scale_joints=parse_scales(a.action_scale_joints))
         self.args = dict(vars(a), env={k: v for k, v in dataclasses.asdict(self.ecfg).items() if k != "nthread"})
         (self.run / "config.json").write_text(json.dumps(self.args, indent=1))
+        self.wb = None                                                  # Weights & Biases when WANDB_PROJECT is set
+        if os.environ.get("WANDB_PROJECT"):
+            import wandb
+            self.wb = wandb.init(entity=os.environ.get("WANDB_ENTITY"), project=os.environ["WANDB_PROJECT"],
+                                 name=os.environ.get("WANDB_RUN_NAME", self.run.name), config=self.args,
+                                 dir=str(self.run), id=os.environ.get("WANDB_RUN_ID", self.run.name.replace("/", "-")),
+                                 resume="allow")
         self._maybe_resume()
         horizon = int(round(self.ecfg.horizon_s / self.ecfg.control_dt))
         t0 = np.random.default_rng(a.seed + 7).integers(0, horizon, a.envs)   # desynchronized episode clocks
@@ -334,6 +341,11 @@ class Trainer:
                        task_success={t: (st["task_s"][i] / st["task_n"][i] if st["task_n"][i] else None) for i, t in enumerate(self.tasks)},
                        visited=float((self.sampler.cnt > 0).mean()), **losses)
             log_f.write(json.dumps(rec) + "\n"); log_f.flush()
+            if self.wb is not None:
+                flat = {k: v for k, v in rec.items() if isinstance(v, (int, float))}
+                flat.update({f"family/{f}": v for f, v in rec["fam_success"].items() if v is not None})
+                flat.update({f"task/{t}": v for t, v in rec["task_success"].items() if v is not None})
+                self.wb.log(flat, step=self.it)
             if self.it % 10 == 0 or self.it <= 3:
                 fam = " ".join(f"{f[:4]}={v:.2f}" for f, v in rec["fam_success"].items() if v is not None)
                 print(f"it {self.it} T={self.transitions / 1e6:.1f}M fps={rec['fps']:.0f} train_success={rec['success']:.3f} "
