@@ -45,7 +45,27 @@ READ_ONLY = ["Read", "Glob", "Grep", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)"
              "Bash(python3 -m json.tool:*)"]
 CODER_TOOLS = ["Edit", "Write"] + READ_ONLY
 DISALLOWED = ["WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"]
-_LIMIT_RE = re.compile(r"(session|usage|weekly|rate)\s+limit|limit\s+reached", re.I)
+_LIMIT_RE = re.compile(r"(session|usage|weekly|rate|hour)\s+limit|limit\s+reached|hit your|resets \d", re.I)
+CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")))
+CREDS_DIR = CONFIG_DIR / "creds"     # <account>.json copies of .credentials.json; `current` names the live one
+
+
+def rotate_credentials(log):
+    """Swap the live .credentials.json for the next saved account in CREDS_DIR (bash cap/auto/save_creds.sh <name>
+    saves one). The live file is copied back to its slot first so refreshed tokens are kept. Returns the new name."""
+    live = CONFIG_DIR / ".credentials.json"
+    names = sorted(p.stem for p in CREDS_DIR.glob("*.json")) if CREDS_DIR.is_dir() else []
+    if len(names) < 2 or not live.exists():
+        return None
+    cur_f = CREDS_DIR / "current"
+    cur = cur_f.read_text().strip() if cur_f.exists() else ""
+    if cur in names:
+        shutil.copy(live, CREDS_DIR / f"{cur}.json")
+    nxt = names[(names.index(cur) + 1) % len(names)] if cur in names else names[0]
+    shutil.copy(CREDS_DIR / f"{nxt}.json", live)
+    cur_f.write_text(nxt)
+    log(f"credentials: {cur or '?'} hit a limit; switched to {nxt}")
+    return nxt
 
 PROGRAM = '''# Assembled by the loop from plan.md + stages/NN_<name>.py{extra} -- edit the stage files, not this file.
 import traceback
@@ -198,7 +218,9 @@ class Loop:
         log = self.run / "log"
         (log / f"{tag}.prompt.md").write_text(prompt)
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
-        for attempt in range(24):
+        attempt, rotations = 0, 0
+        while attempt < 24:
+            attempt += 1
             sid = session or str(uuid.uuid4())
             cmd = [CLAUDE, "-p", "--model", model, "--permission-mode", "acceptEdits",
                    "--allowedTools", ",".join(tools), "--disallowed-tools", ",".join(DISALLOWED),
@@ -223,10 +245,19 @@ class Loop:
                 self.log(f"{tag}: claude rc={p.returncode} {p.stderr[-300:]!r}; retrying in 60 s")
                 time.sleep(60)
                 continue
-            if out.get("is_error") and (_LIMIT_RE.search(result) or out.get("api_error_status")):
-                wait = 1800 if _LIMIT_RE.search(result) else 120
-                self.log(f"{tag}: {result[:160]!r}; sleeping {wait} s")
-                time.sleep(wait)
+            if out.get("is_error") and _LIMIT_RE.search(result):
+                attempt -= 1                                  # usage limits do not count against the retry budget
+                n_slots = len(list(CREDS_DIR.glob("*.json"))) if CREDS_DIR.is_dir() else 0
+                if rotations < n_slots - 1 and rotate_credentials(self.log):
+                    rotations += 1
+                    continue                                  # next account, no wait
+                rotations = 0
+                self.log(f"{tag}: {result[:160]!r}; sleeping 1800 s")
+                time.sleep(1800)
+                continue
+            if out.get("is_error") and out.get("api_error_status"):
+                self.log(f"{tag}: {result[:160]!r}; sleeping 120 s")
+                time.sleep(120)
                 continue
             (log / f"{tag}.reply.md").write_text(result)
             self.log(f"{tag}: {(time.time() - t0) / 60:.1f} min, {out.get('num_turns')} turns, ${out.get('total_cost_usd', 0):.2f}")
