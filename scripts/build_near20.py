@@ -84,10 +84,18 @@ def main():
         while len(states) < n_want and tries < 20 * n_want:
             batch_idx = [near[(k + j) % len(near)] for j in range(a.batch)]
             k += a.batch
-            cand = []
+            cand, placed = [], []
             for j in batch_idx:
-                layout = choose_layout(others, a.board_bank, sp1, rng)
-                cand.append(env.compose(layout, sp1, robot=z["states"][j]))
+                # a layout that does not interpenetrate the arm or the held part at t=0 (else parts get launched)
+                for _ in range(12):
+                    layout = choose_layout(others, a.board_bank, sp1, rng)
+                    c = env.compose(layout, sp1, robot=z["states"][j])
+                    mujoco.mj_setState(m, d, c, mujoco.mjtState.mjSTATE_FULLPHYSICS); mujoco.mj_forward(m, d)
+                    if not contacts_bad(m, d, robot, part_bodies[T], other_parts):
+                        break
+                else:
+                    rejected["layout"] = rejected.get("layout", 0) + 1
+                cand.append(c); placed.append(c.copy())
             cand = np.stack(cand)
             env.set_states(np.arange(a.batch), cand)
             hold = np.zeros((a.batch, 8)); hold[:, 7] = -1.0            # keep the fingers closed on the part
@@ -99,13 +107,15 @@ def main():
                 mujoco.mj_setState(m, d, s, mujoco.mjtState.mjSTATE_FULLPHYSICS); mujoco.mj_forward(m, d)
                 held = -0.004 < s[env.sf].sum() < 0.075      # fingers at the part (P4: ~0.0006), not slammed shut (-0.02)
                 d_act = np.linalg.norm(s[env.sp[:3]] - z["states"][j][sp1[:3]])
-                z_ok = all(s[env.part_slices(t)[0][2]] > -0.02 for t in tasks)
+                on_board = all(abs(s[env.part_slices(t)[0][0]] - 0.5) < 0.19 and abs(s[env.part_slices(t)[0][1]] < 0.19)
+                               and -0.02 < s[env.part_slices(t)[0][2]] < 0.05 for t in tasks)
+                still = all(np.linalg.norm(s[env.part_slices(t)[0][:3]] - placed[i][env.part_slices(t)[0][:3]]) < 0.02 for t in others)
                 bad = contacts_bad(m, d, robot, part_bodies[T], other_parts)
                 if not held:
                     rejected["held"] += 1
                 elif d_act >= 0.01:
                     rejected["moved"] += 1
-                elif not z_ok:
+                elif not on_board or not still:
                     rejected["fell"] += 1
                 elif bad:
                     rejected["contact"] += 1

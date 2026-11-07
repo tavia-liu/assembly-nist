@@ -23,15 +23,17 @@ DEFAULT_CKPT = Path(os.environ.get("CAP_RL_CKPT", ROOT / "checkpoints/e8192_it12
 
 
 class _EnvView:
-    """env.observe() with the part pose the policy may know (the camera estimate), for TorchPolicy."""
+    """env.observe() with the part pose the policy may know (the camera tracker), for TorchPolicy."""
 
     def __init__(self, api):
         self.api = api
 
     def observe(self):
         o = self.api.env.observe()
-        pp, pq, _ = self.api._part_pose()
-        if np.isfinite(pp).all():
+        if self.api._perc is not None:
+            pp, pq, _ = self.api._part_pose()
+            if not np.isfinite(pp).all():            # never seen: no pose at all (never the simulator's)
+                pp, pq = np.array([0.5, 0.0, -1.0]), np.array([1.0, 0.0, 0.0, 0.0])
             o["part_p"] = pp.astype(np.float32)[None]
             o["part_q"] = pq.astype(np.float32)[None]
         return o

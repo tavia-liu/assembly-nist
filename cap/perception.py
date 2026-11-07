@@ -27,7 +27,7 @@ from assembly_policy.sim.env import STATE_SPEC
 from assembly_policy.sim.robot import mat_to_quat, quat_to_mat
 from assembly_policy.sim.tasks import MESH_DIR, load_obj
 
-GLOBAL_CAM = dict(pos=(0.98, -0.62, 0.78), lookat=(0.50, 0.0, 0.03), fovy=42.0)   # front-right of the board
+GLOBAL_CAM = dict(pos=(0.80, -0.42, 0.52), lookat=(0.50, 0.0, 0.02), fovy=34.0)   # front-right, the board fills the frame
 WRIST_CAM = dict(pos="0.05 0 0", quat="0 0.707108 0.707108 0", fovy="75")           # robosuite eye_in_hand
 W, H = (int(v) for v in os.environ.get("CAP_CAM_RES", "640x480").split("x"))
 TRACKER = os.environ.get("CAP_TRACKER", "icp")          # icp (built in) | fpose (FoundationPose server, cap/fpose_server.py)
@@ -93,14 +93,14 @@ class FPoseTracker:
     enough of it, else the fixed camera) and is re-seeded in the other camera's frame on a switch."""
     F = np.diag([1.0, -1.0, -1.0])        # MuJoCo camera (x right, y up, z back) -> CV camera (x right, y down, z forward)
 
-    def __init__(self, mesh_path, port=FPOSE_PORT, min_px=(300, 60)):
-        self.conn = Client(("127.0.0.1", port), authkey=b"fpose")
-        self.mesh = str(mesh_path)
+    def __init__(self, mesh_path, port=FPOSE_PORT, min_px=(150, 40), track=0, conn=None):
+        self.conn = conn or Client(("127.0.0.1", port), authkey=b"fpose")
+        self.mesh, self.track = str(mesh_path), int(track)
         self.min_px = dict(wrist=min_px[0], **{"global": min_px[1]})
         self.T_world_part, self.cam, self.stale = None, None, 0
 
     def _call(self, **req):
-        self.conn.send(dict(mesh=self.mesh, **req))
+        self.conn.send(dict(mesh=self.mesh, track=self.track, **req))
         r = self.conn.recv()
         if "error" in r:
             raise RuntimeError(r["error"])
