@@ -51,13 +51,17 @@ def best_round(run_dir: Path):
 N_EVAL = 100
 
 
-def evaluate(env, policy, task, level, bank_dir=CAP_BANK_DIR, n=N_EVAL, verbose=True):
+def evaluate(env, policy, task, level, bank_dir=CAP_BANK_DIR, n=N_EVAL, verbose=True, record=False, on_episode=None):
+    """on_episode(k, bank_idx, result) is called after every episode (with frames when record=True) so callers can
+    save videos/traces; the protocol itself only returns the summary rows."""
     bank = np.load(Path(bank_dir) / f"{task}_eval.npz")
     idx = np.nonzero(bank["family"] == FAMILIES.index(START_FAMILY))[0][:n]
     rows, t0 = [], time.time()
     for k, i in enumerate(idx):
         try:
-            r = api.run_episode(env, bank["states"][i], policy, level=level, seed=20_000 + k)
+            r = api.run_episode(env, bank["states"][i], policy, level=level, seed=20_000 + k, record=record)
+            if on_episode is not None:
+                on_episode(k, int(i), r)
         except api.LevelError as e:
             r = dict(success=False, safety=False, timeout=False, steps=0, error=str(e), d_asm=float("nan"))
         rows.append(dict(trial=k, bank_idx=int(i), success=bool(r["success"]), safety=bool(r.get("safety", False)),

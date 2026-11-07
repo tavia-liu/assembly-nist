@@ -603,8 +603,19 @@ class Loop:
         rnd, path = eval_protocol.best_round(self.run)
         self.log(f"best round r{rnd:02d}; held-out eval on {path.relative_to(self.run)}")
         policy = eval_protocol.load_policy(path)
-        summary, rows = eval_protocol.evaluate(self.env, policy, self.st["task"], self.st["level"], self.st["bank_dir"])
+        edir = self.run / f"eval_r{rnd:02d}"                 # one attempt dir (video, trace, summary) per held-out start
+
+        def save(k, bank_idx, r):
+            start = dict(id=f"e{k:03d}", bank_idx=bank_idx)
+            r["stdout"] = ""
+            T.write_attempt(edir / start["id"], start, r, self.vis, video=True)
+            shutil.copy(path, edir / start["id"] / "code.py")
+            r.pop("frames", None), r.pop("keyframes", None)
+
+        summary, rows = eval_protocol.evaluate(self.env, policy, self.st["task"], self.st["level"], self.st["bank_dir"],
+                                               record=True, on_episode=save)
         summary["policy"] = str(path)
+        summary["attempts"] = str(edir)
         (self.run / f"eval_r{rnd:02d}.json").write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
         eval_protocol.print_summary(summary, f"r{rnd:02d}")
 
