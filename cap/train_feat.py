@@ -37,10 +37,16 @@ class FeatLocalVecEnv(vecenv.LocalVecEnv):
 
 class FeatTrainer(T.Trainer):
     def __init__(self, a):
+        self._swapped = False                      # base __init__ must not resume into the point-cloud actor
         super().__init__(a)
         self.model = FeatActorCritic(self.pts.n_pts, FEAT_DIM, init_std=a.init_std, max_std=a.max_std, min_std=a.min_std).to(self.dev)
         self.opt = torch.optim.Adam(self.model.parameters(), lr=a.lr)
+        self._swapped = True
         self._maybe_resume()
+
+    def _maybe_resume(self):
+        if self._swapped:
+            super()._maybe_resume()
 
     def _obs(self, o, ids=None):
         ob = super()._obs(o, ids)
