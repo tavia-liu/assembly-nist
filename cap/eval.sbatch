@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 export PYTHONPATH=.:cap MUJOCO_GL=egl
-export FPOSE_PORT=$((8200 + SLURM_JOB_ID % 500)) CAP_WRIST_RES="${CAP_WRIST_RES:-640x480}"
+export FPOSE_PORT=$((8200 + SLURM_JOB_ID % 500))
 FPLOG=fpose-$SLURM_JOB_ID.log
 ( source "${CONDA_SH:-/engrfs/project/chongjie/buzhao/miniconda3/etc/profile.d/conda.sh}" && conda activate "${FPOSE_CONDA_ENV:-fpose}" &&
   export CUDA_HOME=/usr/local/cuda-12.9 PATH=/usr/local/cuda-12.9/bin:$PATH LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64:${LD_LIBRARY_PATH:-} &&

@@ -22,16 +22,14 @@ is told it may call cannot drift from what it is actually allowed to call.
 """
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import mujoco
 
 from assembly_policy.sim.env import STATE_SPEC, BatchedAssemblyEnv, EnvConfig
 from assembly_policy.sim.resets import ResetGenerator
-from assembly_policy.sim.robot import mat_to_quat, quat_mul, quat_to_mat, solve_ik
+from assembly_policy.sim.robot import mat_to_quat, solve_ik
 from assembly_policy.sim.scene import build_xml
-from assembly_policy.sim.tasks import MESH_DIR, TASKS, load_obj, scene_pose
+from assembly_policy.sim.tasks import TASKS, load_obj, scene_pose
 
 # held-out evaluation sets this False: a stage verifier's FAIL is recorded but does not stop the policy
 STRICT_STAGES = True

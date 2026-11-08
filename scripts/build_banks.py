@@ -3,7 +3,7 @@ partial, near-mating), a training bank and a disjoint evaluation bank.
 
 python scripts/build_banks.py                              # all 20 tasks, 640 train + 128 eval per (task, family)
 python scripts/build_banks.py --tasks R8+N12 --workers 32  # a subset (e.g. one Slurm array task per task)
-python scripts/build_banks.py --tasks R8 --families board --out data/banks_board   # cap benchmark starts only
+python scripts/build_banks.py --tasks R8 --families board --out data/banks_board
 
 Output: <out>/<task>_{train,eval}.npz with arrays states (full MuJoCo physics state), family, level, and a .json
 with generation statistics. Seeds are namespaced by (task, split, family, worker), so train and eval banks never

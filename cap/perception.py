@@ -29,7 +29,7 @@ GLOBAL_CAM = dict(pos=(0.80, -0.42, 0.52), lookat=(0.50, 0.0, 0.02), fovy=34.0) 
 GLOBAL_CAM2 = dict(pos=(0.80, 0.42, 0.52), lookat=(0.50, 0.0, 0.02), fovy=34.0)   # front-left: sees what the hand hides from the right
 WRIST_CAM = dict(pos="0.05 0 0", quat="0 0.707108 0.707108 0", fovy="75")           # robosuite eye_in_hand
 W, H = (int(v) for v in os.environ.get("CAP_CAM_RES", "1280x960").split("x"))            # fixed camera
-WW, WH = (int(v) for v in os.environ.get("CAP_WRIST_RES", "320x240").split("x"))         # wrist camera
+WW, WH = (int(v) for v in os.environ.get("CAP_WRIST_RES", "640x480").split("x"))         # wrist camera
 FPOSE_PORT = int(os.environ.get("FPOSE_PORT", "8130"))
 _RENDERERS = {}        # model hash -> (model, data, renderer): one EGL context per model per process
 
