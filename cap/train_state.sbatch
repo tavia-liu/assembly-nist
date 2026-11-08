@@ -17,6 +17,9 @@ TASK=${TASK:-P4}; BANK=${BANK:-data/banks_near}
 LONG=$(.venv/bin/python -c "from assembly_policy.sim.tasks import task_name; print(task_name('$TASK'))")
 RUN_DIR=${RUN_DIR:-runs/${LONG}_state_near}
 NAME=$(basename "$RUN_DIR")
+# bank family tag: banks_near -> near, banks_board -> board, banks (all five families) -> curriculum
+FAM=$(basename "$BANK" | sed "s/^banks_//; s/^banks$/curriculum/")
+export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-$LONG} WANDB_TAGS=${WANDB_TAGS:-state,$FAM,ppo}
 export WANDB_ENTITY=WASHU-MARL WANDB_PROJECT=${WANDB_PROJECT:-assemble} WANDB_RUN_NAME=${WANDB_RUN_NAME:-${NAME}_ppo} WANDB_RUN_ID=${WANDB_RUN_ID:-${NAME}_ppo}
 .venv/bin/python -u -m assembly_policy.train --tasks "$TASK" --bank-dir "$BANK" --sampler uniform --no-eval \
     --run-dir "$RUN_DIR" --envs "${ENVS:-2048}" --iters "${ITERS:-8000}" --steps 32 --nthread 16 \
