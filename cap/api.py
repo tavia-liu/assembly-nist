@@ -366,9 +366,11 @@ def spec(level="grasp"):
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]
         lines.append(f"  api.{name}{sig}\n      {doc}")
+    see = ("camera() (write your own vision on the images) or locate_part() (the provided tracker)"
+           if "locate_part" in allowed else "camera() (write your own vision on the images)")
     lines += ["", "Calling anything else raises LevelError. There is no insert/align/reorient/screw "
                   "primitive; the assembly strategy is yours to compute. The part's pose is never given: see it "
-                  "through camera() (write your own vision on the images) or locate_part() (the provided tracker).",
+                  f"through {see}.",
               "`api.EpisodeOver` is raised as soon as the episode ends -- let it propagate."]
     return "\n".join(lines)
 
