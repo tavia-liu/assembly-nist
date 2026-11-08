@@ -83,6 +83,34 @@ NUT_TASKS = ("N4", "N8", "N12", "N16")
 CONNECTOR_TASKS = ("BNC", "DSUB", "RJ45", "USB", "WP")
 ALL_TASKS = tuple(TASKS)
 
+# human-readable names for run directories, wandb runs, reports and videos (the short IDs stay the keys)
+TASK_NAMES = {
+    "R4": "rod_4mm",
+    "R8": "rod_8mm",
+    "R12": "rod_12mm",
+    "R16": "rod_16mm",
+    "P4": "peg_4mm",
+    "P8": "peg_8mm",
+    "P12": "peg_12mm",
+    "P16": "peg_16mm",
+    "Gs": "gear_small",
+    "Gm": "gear_medium",
+    "Gl": "gear_large",
+    "N4": "nut_m4",
+    "N8": "nut_m8",
+    "N12": "nut_m12",
+    "N16": "nut_m16",
+    "BNC": "bnc_connector",
+    "DSUB": "dsub_connector",
+    "RJ45": "rj45_connector",
+    "USB": "usb_connector",
+    "WP": "waterproof_connector",
+}
+
+
+def task_name(task: str) -> str:
+    return TASK_NAMES.get(task, task)
+
 # named task sets
 TASK_SETS = {"all20": ALL_TASKS, "ins8": INSERTION_TASKS, "gears": GEAR_TASKS, "nuts": NUT_TASKS,
              "connectors": CONNECTOR_TASKS}

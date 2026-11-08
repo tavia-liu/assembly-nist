@@ -13,6 +13,7 @@ replies READY (stage files revised) or EXPERIMENT (experiments/NN_<slug>/ to run
 """
 from __future__ import annotations
 
+from assembly_policy.sim.tasks import task_name
 import argparse
 import fcntl
 import hashlib
@@ -641,7 +642,7 @@ def main():
     ap.add_argument("--smoke", action="store_true",
                     help="no claude: a trivial stage file, one round without audit, one experiment; checks the plumbing")
     a = ap.parse_args()
-    run = Path(a.out or ROOT / f"cap/runs/autoloop/{a.task}_auto").resolve()
+    run = Path(a.out or ROOT / f"cap/runs/autoloop/{task_name(a.task)}_auto").resolve()
     if (run / "state.json").exists() and not a.resume:
         sys.exit(f"{run} exists; pass --resume to continue it or another --out")
     loop = Loop(a, run)

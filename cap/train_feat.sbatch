@@ -15,6 +15,8 @@ set -uo pipefail
 cd /engrfs/project/chongjie/buzhao/autodeco/assembly-nist
 export PYTHONPATH=.:cap MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 TASK=${TASK:-P4}
-export WANDB_ENTITY=WASHU-MARL WANDB_PROJECT=${WANDB_PROJECT:-assemble} WANDB_RUN_NAME=feat_${TASK}_near_ppo WANDB_RUN_ID=feat_${TASK}_near_ppo
-.venv/bin/python -u cap/train_feat.py --task "$TASK" --run-dir "${RUN_DIR:-runs/feat_$TASK}" --envs "${ENVS:-128}" \
+LONG=$(.venv/bin/python -c "from assembly_policy.sim.tasks import task_name; print(task_name('$TASK'))")
+# run ids stay feat_<TASK>_near_ppo so resubmits resume the same wandb run; display name uses the long task name
+export WANDB_ENTITY=WASHU-MARL WANDB_PROJECT=${WANDB_PROJECT:-assemble} WANDB_RUN_NAME=${WANDB_RUN_NAME:-${LONG}_encoder_near_ppo} WANDB_RUN_ID=${WANDB_RUN_ID:-feat_${TASK}_near_ppo}
+.venv/bin/python -u cap/train_feat.py --task "$TASK" --run-dir "${RUN_DIR:-runs/${LONG}_encoder_near}" --envs "${ENVS:-128}" \
     --steps 32 --iters "${ITERS:-12000}" --save-every 25 --keep-every 100 --max-hours 23.5 ${TRAIN_ARGS:-}
