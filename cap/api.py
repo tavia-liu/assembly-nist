@@ -358,6 +358,12 @@ def spec(level="grasp"):
     for name in allowed:
         fn = getattr(AssemblyAPI, name)
         doc = " ".join((fn.__doc__ or "").split())
+        if PERCEPTION == "oracle":
+            doc = {"observe": doc.replace("The part is NOT in here: it is seen only through the cameras (camera()) or the "
+                                          "tracker built on them (locate_part()).",
+                                          "ORACLE mode: part_pos [3] and part_quat [4] are the simulator's exact part pose."),
+                   "locate_part": "ORACLE mode: (pos [3], quat [4], None), the simulator's exact part pose (the same as "
+                                  "observe()['part_pos'/'part_quat'])."}.get(name, doc)
         import inspect
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]
