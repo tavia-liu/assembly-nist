@@ -22,6 +22,8 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
+from assembly_policy.sim.tasks import equivalent_keypoints
+
 from .robot import FINGER_OPEN, HOME_Q, Indices, axis_angle_quat, mat_to_quat, quat_mul, quat_to_mat, random_quat, solve_ik
 from .scene import PhysicsConfig, build_xml, ENV, GRIP, PART, ARM
 from .env import STATE_SPEC
@@ -205,13 +207,14 @@ class ResetGenerator:
         self.grip_geoms = set(np.nonzero(np.isin(g, self.ix.finger_bodies + [self.ix.hand_body]))[0])
         self.nstate = mujoco.mj_stateSize(self.m, STATE_SPEC)
         self.kp = np.asarray(self.task.keypoints)
+        self.kp_eq = equivalent_keypoints(self.task)
         self.goal_kp = self.goal_pos + self.kp @ quat_to_mat(self.goal_quat).T
 
     def _assembly_distance(self):
         """Success metric of sim.py: max distance between part keypoints and their assembled positions."""
         p = self.d.qpos[self.ix.part_qpos:self.ix.part_qpos + 3]
         R = quat_to_mat(self.d.qpos[self.ix.part_qpos + 3:self.ix.part_qpos + 7])
-        return float(np.linalg.norm(p + self.kp @ R.T - self.goal_kp, axis=1).max())
+        return float(min(np.linalg.norm(p + ks @ R.T - self.goal_kp, axis=1).max() for ks in self.kp_eq))
 
     # -------------------------------------------------------------- low-level
     def _set(self, q_arm, finger, part_pos, part_quat, ctrl_finger):

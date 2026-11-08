@@ -153,3 +153,51 @@ def load_obj(stem: str):
 # where reset banks and runs are written (override with $ASSEMBLENIST_DATA)
 DATA_DIR = Path(os.environ.get("ASSEMBLENIST_DATA", ROOT / "data"))
 BANK_DIR = DATA_DIR / "banks"
+
+
+# ---------------------------------------------------------------- mesh symmetries (success metric)
+_EQ_CACHE: dict = {}
+
+
+def _surface_points(v, f, n, rng):
+    a, b, c = v[f[:, 0]], v[f[:, 1]], v[f[:, 2]]
+    area = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    tri = rng.choice(len(f), n, p=area / area.sum())
+    r1, r2 = np.sqrt(rng.random(n))[:, None], rng.random(n)[:, None]
+    return (1 - r1) * a[tri] + r1 * (1 - r2) * b[tri] + r1 * r2 * c[tri]
+
+
+def mesh_symmetries(stem: str, n=20000, seed=0):
+    """Rigid transforms (R, t) in the part frame, identity first, under which the part's surface maps onto itself:
+    the 180-degree flips about the x and y axes through the bounding-box centre (they swap the two ends of a rod or
+    peg). Decided numerically: a flipped surface sample must lie as close to the surface as a fresh sample does."""
+    from scipy.spatial import cKDTree
+    v, f = load_obj(stem)
+    rng = np.random.default_rng(seed)
+    if len(f) == 0:
+        return [(np.eye(3), np.zeros(3))]
+    base, probe = _surface_points(v, f, n, rng), _surface_points(v, f, n, rng)
+    tree = cKDTree(base)
+    tol = 2.0 * np.percentile(tree.query(probe)[0], 98) + 1e-4
+    c = 0.5 * (v.min(0) + v.max(0))
+    out = [(np.eye(3), np.zeros(3))]
+    for R in (np.diag([1.0, -1.0, -1.0]), np.diag([-1.0, 1.0, -1.0])):
+        t = c - R @ c                                   # x' = R (x - c) + c
+        if np.percentile(tree.query(probe @ R.T + t)[0], 98) < tol:
+            out.append((R, t))
+    return out
+
+
+def equivalent_keypoints(task) -> np.ndarray:
+    """(S, K, 3): the task's success keypoints under every mesh symmetry of its part (S=1 for asymmetric parts).
+    The success metric takes the minimum over S, so a symmetric part counts as assembled whichever way it is in."""
+    key = (task.part_asset, tuple(map(tuple, task.keypoints)))
+    if key not in _EQ_CACHE:
+        kp = np.asarray(task.keypoints, float)
+        sets = [kp @ R.T + t for R, t in mesh_symmetries(task.part_asset)]
+        uniq = []
+        for ks in sets:
+            if not any(np.allclose(ks, u, atol=1e-6) for u in uniq):
+                uniq.append(ks)
+        _EQ_CACHE[key] = np.stack(uniq)
+    return _EQ_CACHE[key]

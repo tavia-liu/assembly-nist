@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import mujoco
 import numpy as np
+
+from assembly_policy.sim.tasks import equivalent_keypoints
 from mujoco import rollout
 
 from .kinematics import FrankaFK
@@ -76,6 +78,7 @@ class TaskModel:
         fpos, fquat = scene_pose(t.fixture_scene)
         self.fixture_pos, self.fixture_R = fpos, quat_to_mat(fquat)
         self.keypoints = np.asarray(t.keypoints)
+        self.kp_eq = equivalent_keypoints(t)                 # (S,K,3): keypoints under the part's mesh symmetries
         # assembled keypoints in world: part frame == part scene pose
         ppos, pquat = scene_pose(t.part_scene)
         self.goal_kp = ppos + self.keypoints @ quat_to_mat(pquat).T
@@ -244,8 +247,8 @@ class BatchedAssemblyEnv:
             ids = np.nonzero(self.task == k)[0]
             if len(ids) == 0:
                 continue
-            kp = pp[ids, None, :] + np.einsum("nij,kj->nki", R[ids], tm.keypoints)
-            d[ids] = np.linalg.norm(kp - tm.goal_kp[None], axis=2).max(1)
+            kp = pp[ids, None, None, :] + np.einsum("nij,skj->nski", R[ids], tm.kp_eq)        # (n,S,K,3)
+            d[ids] = np.linalg.norm(kp - tm.goal_kp[None, None], axis=3).max(2).min(1)          # min over symmetries
         return d
 
 

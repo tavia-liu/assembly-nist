@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 import mujoco
 import numpy as np
 
+from assembly_policy.sim.tasks import equivalent_keypoints
+
 from assembly_policy.sim.env import HISTORY, PROPRIO_DIM, STATE_SPEC, BatchedAssemblyEnv, EnvConfig, FrankaFK
 from assembly_policy.sim.robot import FINGER_OPEN, HOME_Q, quat_to_mat
 from assembly_policy.sim.scene import ARM_KD, ARM_KP, TORQUE_LIMIT, VELOCITY_LIMIT, PhysicsConfig
@@ -63,7 +65,7 @@ class MultiModel:
             goal_kp = ppos + kp @ quat_to_mat(pquat).T
             g = goal_kp[1] - goal_kp[0]
             fpos, fquat = scene_pose(task.fixture_scene)
-            self.goal[t] = dict(keypoints=kp, goal_kp=goal_kp, goal_axis=g / np.linalg.norm(g),
+            self.goal[t] = dict(keypoints=kp, kp_eq=equivalent_keypoints(task), goal_kp=goal_kp, goal_axis=g / np.linalg.norm(g),
                                 fixture_pos=fpos, fixture_R=quat_to_mat(fquat))
         self.set_active(tasks[0])
 
@@ -127,8 +129,8 @@ class MultiPartEnv(BatchedAssemblyEnv):
         t = t or self.active
         g, sp = self.models[0].goal[t], self.part_slices(t)[0]
         pp, pq = self.state[:, sp[:3]], self.state[:, sp[3:7]]
-        kp = pp[:, None, :] + np.einsum("nij,kj->nki", quat_to_mat(pq), g["keypoints"])
-        return np.linalg.norm(kp - g["goal_kp"][None], axis=2).max(1)
+        kp = pp[:, None, None, :] + np.einsum("nij,skj->nski", quat_to_mat(pq), g["kp_eq"])
+        return np.linalg.norm(kp - g["goal_kp"][None, None], axis=3).max(2).min(1)        # min over mesh symmetries
 
     def assembled(self):
         """Final scoring: every part's assembly distance (m) and whether it is seated."""
