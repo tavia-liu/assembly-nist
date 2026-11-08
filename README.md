@@ -55,6 +55,9 @@ sbatch --export=ALL,TASK=R8,POLICY=path/to/policy.py cap/eval.sbatch     # start
 MUJOCO_GL=egl PYTHONPATH=.:cap python cap/eval_protocol.py --task R8 --policy path/to/policy.py
 ```
 
+Anything that renders (cameras, videos) needs a GPU: `gpu.sbatch` is the template for running any command on one
+(`sbatch --export=ALL,CMD="..." gpu.sbatch`); it also starts the FoundationPose service for the job.
+
 Develop on other seeds (`--seed 0`); seed 1000 is for reporting.
 
 Whole board (several parts physically on the board, one continuous episode, 40 s per part, scored at the end):
@@ -82,7 +85,8 @@ plugin/                MuJoCo SDF collision plugin
 cap/api.py             the policy-facing API; api.spec() renders its docs
 cap/perception.py      cameras, masks, depth; FoundationPose client
 cap/fpose_server.py    FoundationPose as a local service
-cap/eval_protocol.py   single-part held-out protocol (seeded starts, videos)
+cap/eval_protocol.py   single-part held-out protocol (seeded starts, videos); cap/eval.sbatch runs it on a GPU
+gpu.sbatch             GPU job template for any command (starts the FoundationPose service)
 cap/multi_board.py, multi_env.py, multi_scene.py   whole-board protocol
 examples/              a minimal policy
 ```

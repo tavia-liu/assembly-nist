@@ -14,9 +14,6 @@ affiliated with or endorsed by their authors.
 | Signed-distance grids of connector meshes | computed with [libigl](https://libigl.github.io/) (generalized winding number) | see upstream | offline tool `tools/build_sdf_grids.py` (outputs shipped in `assets/sdf/`) |
 | Convex proxies of connectors | computed with [CoACD](https://github.com/SarahWeiii/CoACD) | see upstream | offline tool `tools/build_proxies.py` (outputs shipped in `assets/proxies/`) |
 | USD parsing | [usd-core](https://pypi.org/project/usd-core/) | see upstream | offline tool `tools/extract_nist_meshes.py` (outputs shipped in `assets/meshes/`) |
-| PPO with adaptive-KL learning rate | design follows [rsl_rl](https://github.com/leggedrobotics/rsl_rl) | see upstream | re-implemented in `assembly_policy/train.py` |
-| Actor/critic architecture | SimBa (Lee et al., 2024), arranged as described in the AlphaNIST paper (Fig. 3) | - | `assembly_policy/rl/nets.py` |
-| Reset families (loose, pickup, transport, partial, near-mating); Success Guided Sampling | OmniReset-style reset distributions and the SGS sampler as described in the AlphaNIST and SGS papers | - | `assembly_policy/sim/resets.py`, `assembly_policy/rl/sampler.py` |
 | Joint impedance gains | [libfranka](https://github.com/frankaemika/libfranka) joint impedance example | see upstream | values in `assembly_policy/sim/scene.py` |
 
 Everything else (thread and connector SDF plugin, scene builder, reset generator, batched simulator, remote
