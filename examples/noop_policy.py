@@ -1,8 +1,8 @@
 """The smallest valid policy: looks for the part, then waits out the episode. Replace policy() with your own.
 
-A policy is a Python file defining policy(api); it may call only the methods of its API level, listed by
+A policy is a Python file defining policy(api); the methods of `api` are listed by
 
-    PYTHONPATH=.:cap python -c "import api; print(api.spec('final'))"
+    PYTHONPATH=.:cap python -c "import api; print(api.spec())"
 
 api.EpisodeOver is raised when the episode ends (success, safety stop or the time limit): let it propagate.
 """

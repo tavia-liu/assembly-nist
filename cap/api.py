@@ -1,24 +1,12 @@
-"""Primitive API for driving one AssembleNIST episode from a policy we author elsewhere.
+"""The policy-facing API of the benchmark: one episode of one NIST task-board assembly.
 
-The simulator only accepts 8-D relative joint increments at 25 Hz (q_target = q + scale*a,
-a[7] latches the gripper), so any LLM-authored policy -- a program written once, or an agent
-deciding in the loop -- needs a layer above that. This file is that layer, and it is also the
-experiment's prior-knowledge boundary, so the boundary is made explicit and enforced.
+The simulator accepts 8-D relative joint increments at 25 Hz (q_target = q + scale*a, a[7] latches the gripper).
+AssemblyAPI wraps that with what a real cell offers a policy: the robot's state, three RGB-D cameras, a 6-DoF
+part pose estimator on those cameras (FoundationPose), the part's CAD mesh and task-agnostic kinematics (IK, servo
+to a pose, gripper). The simulator's part pose and assembly distance are never exposed.
 
-Three nested levels; a policy declares one and calls nothing above it:
-
-  raw    observe() / step() / constants() / camera()   the simulator's robot state and the cameras
-  kin    + ik() move_to() move_to_joints()             task-agnostic kinematics: identical for all
-           set_gripper() wait()                        20 assemblies and any 7-DoF arm
-  final  + locate_part() part_model()                  a 6-DoF pose estimator on the cameras
-                                                       (FoundationPose) and the part's CAD mesh
-
-Withheld at every level: the simulator's part pose and assembly distance, insert() / align() /
-reorient() / screw(), grasp candidates, and any worded hint about how to assemble. Where to
-grasp, how to bring a part upright, when to press down: all of that is the policy's job.
-
-`spec(level)` renders the prompt-facing documentation from this same table, so what a policy
-is told it may call cannot drift from what it is actually allowed to call.
+`spec()` renders the documentation of every method from the docstrings below, so what a policy is told cannot
+drift from what it can call. A policy is `policy(api)`; `run_episode()` runs it on one start state.
 """
 from __future__ import annotations
 
@@ -31,35 +19,19 @@ from assembly_policy.sim.robot import mat_to_quat, solve_ik
 from assembly_policy.sim.scene import build_xml
 from assembly_policy.sim.tasks import TASKS, load_obj, scene_pose
 
-# held-out evaluation sets this False: a stage verifier's FAIL is recorded but does not stop the policy
-STRICT_STAGES = True
-
-LEVELS = ("raw", "kin", "final")
-
-# method -> lowest level at which it may be called
-_LEVEL_OF = {
-    "observe": "raw", "step": "raw", "constants": "raw", "camera": "raw",
-    "ik": "kin", "move_to": "kin", "move_to_joints": "kin", "set_gripper": "kin", "wait": "kin",
-    "locate_part": "final", "part_model": "final",
-}
+METHODS = ("observe", "step", "constants", "camera", "ik", "move_to", "move_to_joints", "set_gripper", "wait",
+           "locate_part", "part_model")
 
 
 class EpisodeOver(Exception):
     """The episode terminated (success, safety violation, or the 15 s horizon)."""
 
 
-class LevelError(Exception):
-    """The policy called a primitive above its declared level."""
-
-
 class AssemblyAPI:
     """One episode of one task. A policy drives it through these methods only."""
 
-    def __init__(self, env: BatchedAssemblyEnv, rng: np.random.Generator, level: str = "final",
-                 record: bool = False):
-        if level not in LEVELS:
-            raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
-        self.env, self.rng, self.level = env, rng, level
+    def __init__(self, env: BatchedAssemblyEnv, rng: np.random.Generator, record: bool = False):
+        self.env, self.rng = env, rng
         self.tm = env.models[0]
         self.m = self.tm.model
         self._ik_d = mujoco.MjData(self.m)
@@ -79,7 +51,6 @@ class AssemblyAPI:
         # servo step would re-open the fingers and drop the part
         self.grip_open = bool(env.grip_cmd[0] > 0)
         self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
-        self.strict_stages = STRICT_STAGES
         # the cameras and the pose tracker on them: the only way the part reaches a policy
         from perception import PartPerceiver
         if hasattr(env, "tasks"):                                       # multi-part board (cap/multi_env.py)
@@ -108,11 +79,6 @@ class AssemblyAPI:
         return self._views_cache[1]
 
     # ------------------------------------------------------------------ enforcement
-    def _require(self, name):
-        need = _LEVEL_OF[name]
-        if LEVELS.index(need) > LEVELS.index(self.level):
-            raise LevelError(f"{name}() needs level {need!r}; this policy declared {self.level!r}")
-
     def _rec(self, call, **kw):
         """Append a trace entry: the primitive, its result, and what the robot could see afterwards."""
         s = self.env.state[0]
@@ -131,7 +97,6 @@ class AssemblyAPI:
     # ------------------------------------------------------------------ raw
     def constants(self):
         """Fixed numbers of the MDP (same every episode)."""
-        self._require("constants")
         return dict(control_hz=round(1.0 / self.env.ecfg.control_dt), horizon_s=self.env.ecfg.horizon_s,
                     action_dim=8, action_scale=self.scale.round(4).tolist(),
                     success_threshold_m=self.env.ecfg.success_threshold,
@@ -151,7 +116,6 @@ class AssemblyAPI:
         tau_ext_hat / O_F_ext_hat_K. The simulator's assembly distance is NOT exposed: no
         robot can measure it.
         """
-        self._require("observe")
         s = self.env.state[0]
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
         J = self._jacobian()
@@ -176,7 +140,6 @@ class AssemblyAPI:
         fixed over the board (front-right and front-left), `wrist` rides on the hand looking along the fingers. A
         pixel (u,v) with depth d is at cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world.
         Resolution {RES}; no sensor noise."""
-        self._require("camera")
         return {n: dict(v) for n, v in self._views().items()}
 
     def locate_part(self):
@@ -187,7 +150,6 @@ class AssemblyAPI:
         until the part has been seen once; while it is hidden the last estimate is returned (stale > 0). It is an
         estimate: a few mm / degrees off at best, worse when the part is small in the image or mostly hidden;
         symmetric parts have an arbitrary roll."""
-        self._require("locate_part")
         pp, pq, conf = self._part_pose()
         if not np.isfinite(pp).all():
             return None, None, conf
@@ -228,13 +190,11 @@ class AssemblyAPI:
         action_scale (clipped to [-1,1]); action[7] > 0.5 commands fully open (0.08 m), < -0.5
         fully closed, in between keeps the current gripper target (set_gripper(width=) sets an
         intermediate one). Returns observe(). Raises EpisodeOver when the episode ends."""
-        self._require("step")
         return self._step(np.asarray(action, float).reshape(8))
 
     # ------------------------------------------------------------------ kin
     def ik(self, pos, quat, q_init=None):
         """Damped-least-squares IK for the TCP pose. Returns (joints[7], reachable)."""
-        self._require("ik")
         q, ok = solve_ik(self.m, self._ik_d, self.env.idx, np.asarray(pos, float),
                          np.asarray(quat, float),
                          q_init=self.env.state[0, self.env.sq] if q_init is None else q_init,
@@ -244,7 +204,6 @@ class AssemblyAPI:
     def move_to(self, pos, quat, timeout_s=3.0, tol=0.01, gain=1.0):
         """Servo the TCP to a world pose. Returns True if the joint target was reached within
         `tol` rad on every joint. Consumes episode time; raises EpisodeOver if it runs out."""
-        self._require("move_to")
         q_target, reachable = self.ik(pos, quat)
         if not reachable:
             self._rec("move_to", ok=False, why="unreachable", pos=np.round(pos, 4).tolist())
@@ -256,7 +215,6 @@ class AssemblyAPI:
 
     def move_to_joints(self, q_target, timeout_s=3.0, tol=0.01, gain=1.0, _rec=True):
         """Servo the arm to a joint configuration, holding the current gripper command."""
-        self._require("move_to_joints")
         q_target = np.asarray(q_target, float).reshape(7)
         a = np.zeros(8)
         for _ in range(max(1, int(timeout_s / self.env.ecfg.control_dt))):
@@ -275,7 +233,6 @@ class AssemblyAPI:
         """Command the gripper and hold the arm still while the fingers act. Either open_=True/False
         (fully open 0.08 m / fully closed, force-limited) or width= a target opening in metres
         (0 .. 0.08), as a Franka Hand's move(width). The target persists until the next command."""
-        self._require("set_gripper")
         if width is not None:
             per_finger = float(np.clip(width / 2.0, self.env.ecfg.grip_close, 0.04))
             self.env.grip_cmd[0] = per_finger
@@ -293,7 +250,6 @@ class AssemblyAPI:
 
     def wait(self, seconds=0.2):
         """Hold the current joint and gripper targets."""
-        self._require("wait")
         a = np.zeros(8)
         a[7] = self._a7
         for _ in range(max(1, int(seconds / self.env.ecfg.control_dt))):
@@ -303,7 +259,6 @@ class AssemblyAPI:
     def part_model(self):
         """The part's CAD mesh in the part frame (the frame locate_part() and goal_* refer to): dict(vertices [N,3]
         metres, faces [M,3] vertex indices, bbox_min [3], bbox_max [3]). Same every episode."""
-        self._require("part_model")
         v, f = load_obj(self.task.part_asset)
         return dict(vertices=v.copy(), faces=f.copy(), bbox_min=v.min(0), bbox_max=v.max(0))
 
@@ -327,27 +282,21 @@ class AssemblyAPI:
 
 
 # ---------------------------------------------------------------------- prompt spec
-def spec(level="final"):
-    """The API documentation a policy is given, rendered from _LEVEL_OF so it cannot drift."""
-    allowed = [n for n, lv in _LEVEL_OF.items() if LEVELS.index(lv) <= LEVELS.index(level)]
-    lines = [f"API level {level!r}. You may call ONLY these methods on `api`:", ""]
-    for name in allowed:
+def spec():
+    """The API documentation a policy is given, rendered from the method docstrings."""
+    import inspect
+    lines = ["Methods of `api`, the only interface to the robot and the cameras:", ""]
+    for name in METHODS:
         fn = getattr(AssemblyAPI, name)
         doc = " ".join((fn.__doc__ or "").split())
-        if name == "observe" and "locate_part" not in allowed:
-            doc = doc.replace(" or the tracker built on them (locate_part())", "")
         if name == "camera":
             from perception import W, H, WW, WH
             doc = doc.replace("{RES}", f"global/global2 {W}x{H}, wrist {WW}x{WH}")
-        import inspect
-        sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
-        sig = sig.split(" -> ")[0]
+        sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()").split(" -> ")[0]
         lines.append(f"  api.{name}{sig}\n      {doc}")
-    see = ("camera() (write your own vision on the images) or locate_part() (the provided tracker)"
-           if "locate_part" in allowed else "camera() (write your own vision on the images)")
-    lines += ["", "Calling anything else raises LevelError. There is no insert/align/reorient/screw "
-                  "primitive; the assembly strategy is yours to compute. The part's pose is never given: see it "
-                  f"through {see}.",
+    lines += ["", "There is no insert/align/reorient/screw primitive; the assembly strategy is yours to compute. The part's "
+                  "pose is never given: see it through camera() (your own vision on the images) or locate_part() (the "
+                  "provided estimator).",
               "`api.EpisodeOver` is raised as soon as the episode ends -- let it propagate."]
     return "\n".join(lines)
 
@@ -367,17 +316,15 @@ def sample_starts(task_name, family, n, seed=0):
     return states
 
 
-def run_episode(env, state, policy, level="final", seed=0, record=False):
+def run_episode(env, state, policy, seed=0, record=False):
     """Run `policy(api)` on one start state. Returns the outcome and the primitive trace."""
     env.set_states([0], np.asarray(state)[None, :], task_ids=[0])
-    api = AssemblyAPI(env, np.random.default_rng(seed), level=level, record=record)
+    api = AssemblyAPI(env, np.random.default_rng(seed), record=record)
     err = None
     try:
         policy(api)
     except EpisodeOver:
         pass
-    except LevelError:
-        raise
     except Exception as e:                       # a buggy policy is a result, not a crash
         err = f"{type(e).__name__}: {e}"
     if not api.done:                             # policy returned early; let the clock run out

@@ -4,8 +4,8 @@ A MuJoCo benchmark for the 20 assemblies of the **NIST Assembly Task Board 1** w
 sees the part **only through cameras**. The simulator's part pose is never exposed; everything a policy observes
 exists on a real cell with two fixed RGB-D cameras and a wrist camera.
 
-Built on [AssembleNIST](docs/ASSEMBLENIST_README.md) (the simulator, the 20 tasks and its PPO baseline, kept
-unchanged under `assembly_policy/`). The benchmark layer is `cap/`.
+The simulator (`assembly_policy/sim`, `assets/`, `plugin/`) comes from
+[AssembleNIST](https://github.com/suniique/assembly-nist) by Tao Sun; the benchmark layer is `cap/`.
 
 ## Task
 
@@ -22,13 +22,13 @@ counts; gears and connectors have one orientation).
 | nuts | N4 N8 N12 N16 |
 | connectors | BNC DSUB RJ45 USB WP |
 
-The task specification a policy gets: the part's ID, its CAD mesh (`api.part_model()`), the board/fixture (in the
-scene) and the goal pose (`goal_pos`, `goal_quat` in `api.observe()`).
+A policy is given the part's ID, its CAD mesh (`api.part_model()`), the board with its fixtures (in the scene)
+and the goal pose (`goal_pos`, `goal_quat` in `api.observe()`).
 
-## What a policy observes (API level `final`)
+## What a policy observes
 
 ```
-PYTHONPATH=.:cap python -c "import api; print(api.spec('final'))"
+PYTHONPATH=.:cap python -c "import api; print(api.spec())"
 ```
 
 | call | gives | real-cell counterpart |
@@ -40,26 +40,24 @@ PYTHONPATH=.:cap python -c "import api; print(api.spec('final'))"
 | `ik / move_to / move_to_joints / set_gripper / wait` | task-agnostic kinematics | the arm controller |
 | `step(a)` | raw 25 Hz joint increments | the arm controller |
 
-Idealisations to keep in mind: the instance mask comes from the renderer (a real cell runs a segmentation
-model), depth has no sensor noise, and the pose estimator's compute time does not consume episode time.
+Idealisations: the instance mask comes from the renderer (a real cell runs a segmentation model), depth has no
+sensor noise, and the pose estimator's compute time does not consume episode time.
 
-Withheld at every level: the simulator's part pose and assembly distance; any insert/align/screw primitive.
+Never exposed: the simulator's part pose and assembly distance. There is no insert/align/screw primitive.
 
 ## Running an evaluation
 
 A policy is a Python file defining `policy(api)` (see `examples/noop_policy.py`). The held-out protocol runs 100
-`board` starts from seed 1000, saves `eval.json` and one video per episode:
+`board` starts from seed 1000 and writes `eval.json` plus one video per episode:
 
 ```
 sbatch --export=ALL,TASK=R8,POLICY=path/to/policy.py cap/eval.sbatch     # starts the FoundationPose service, then:
 MUJOCO_GL=egl PYTHONPATH=.:cap python cap/eval_protocol.py --task R8 --policy path/to/policy.py
 ```
 
-Develop on other seeds (`--seed 0`); seed 1000 is for reporting. Stage verifiers inside a policy do not stop an
-episode during evaluation (`api.strict_stages` is False there).
+Develop on other seeds (`--seed 0`); seed 1000 is for reporting.
 
-Whole-board protocol (several parts physically on the board, one continuous episode, 40 s per part, scored at
-the end):
+Whole board (several parts physically on the board, one continuous episode, 40 s per part, scored at the end):
 
 ```
 MUJOCO_GL=egl PYTHONPATH=.:cap python cap/multi_board.py --tasks board20 --policy path/to/policy.py --n-seeds 10
@@ -68,22 +66,23 @@ MUJOCO_GL=egl PYTHONPATH=.:cap python cap/multi_board.py --tasks board20 --polic
 ## Setup
 
 ```
-python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install imageio[ffmpeg]
+python -m venv .venv && .venv/bin/pip install -e .
 ```
 
-`locate_part()` needs the FoundationPose service, `cap/fpose_server.py`, running in a conda env with
-[FoundationPose](https://github.com/NVlabs/FoundationPose) installed (`FOUNDATIONPOSE_DIR`), on a GPU; it listens
-on `$FPOSE_PORT` (default 8130). `cap/eval.sbatch` starts it for the job. Rendering uses EGL (`MUJOCO_GL=egl`).
+`locate_part()` needs the FoundationPose service, `cap/fpose_server.py`, running on a GPU in a conda env with
+[FoundationPose](https://github.com/NVlabs/FoundationPose) installed (`FOUNDATIONPOSE_DIR`); it listens on
+`$FPOSE_PORT` (default 8130). `cap/eval.sbatch` starts it for the job. Rendering uses EGL (`MUJOCO_GL=egl`).
 
 ## Layout
 
 ```
-assembly_policy/   simulator, 20 tasks, reset generator, symmetric success metric, PPO baseline (AssembleNIST)
-assets/            board, fixtures and part meshes (NIST ATB1 CAD)
-cap/api.py         the policy-facing API and its levels (raw, kin, final); api.spec(level) renders the docs
-cap/perception.py  cameras, masks, depth; FoundationPose client
-cap/fpose_server.py FoundationPose as a local service
-cap/eval_protocol.py  single-part held-out protocol (seeded starts, videos)
+assembly_policy/sim/   simulator: scene, robot, 20 tasks, reset generator, symmetric success metric
+assets/                board, fixtures and part meshes (NIST ATB1 CAD), SDF grids, collision proxies
+plugin/                MuJoCo SDF collision plugin
+cap/api.py             the policy-facing API; api.spec() renders its docs
+cap/perception.py      cameras, masks, depth; FoundationPose client
+cap/fpose_server.py    FoundationPose as a local service
+cap/eval_protocol.py   single-part held-out protocol (seeded starts, videos)
 cap/multi_board.py, multi_env.py, multi_scene.py   whole-board protocol
-examples/          a minimal policy
+examples/              a minimal policy
 ```

@@ -23,5 +23,5 @@ FPSRV=$!
 trap 'kill $FPSRV 2>/dev/null' EXIT
 for i in $(seq 1 150); do grep -q listening $FPLOG 2>/dev/null && break; kill -0 $FPSRV 2>/dev/null || { echo "fpose server died"; tail $FPLOG; exit 1; }; sleep 2; done
 grep -q listening $FPLOG || { echo "fpose server not up"; tail $FPLOG; exit 1; }
-"${PYTHON:-.venv/bin/python}" -u cap/eval_protocol.py --task "${TASK:-R8}" --policy "$POLICY" --level "${LEVEL:-final}" \
+"${PYTHON:-.venv/bin/python}" -u cap/eval_protocol.py --task "${TASK:-R8}" --policy "$POLICY" \
     --n "${N:-100}" --seed "${SEED:-1000}" --horizon "${HORIZON:-40}" ${OUT:+--out "$OUT"}

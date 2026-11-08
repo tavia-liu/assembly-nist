@@ -4,8 +4,7 @@ Protocol. The part lies loose on the board at a random settled pose, the robot i
 the gripper open (reset family `board`); the policy has --horizon seconds (default 40) to assemble it. Success:
 both of the part's keypoints within 1 mm of their goal, for whichever of the part's mesh symmetries fits best (a
 rod seated either way up counts). Starts come from the simulator's reset generator seeded by --seed: seed 1000
-(the default) is the held-out set; develop on other seeds. Every episode is rendered to an mp4. Stage verifiers a
-policy may carry (api.strict_stages) do not stop an episode here: they are recorded in the trace only.
+(the default) is the held-out set; develop on other seeds. Every episode is rendered to an mp4.
 Reported: success rate, completion time of the successful episodes, timeouts, safety stops, policy errors.
 
   MUJOCO_GL=egl PYTHONPATH=.:cap python cap/eval_protocol.py --task R8 --policy my_policy.py --out runs/eval/R8
@@ -92,30 +91,23 @@ class Video:
         imageio.mimwrite(out, video, fps=FPS, codec="libx264", quality=7, macro_block_size=8)
 
 
-def evaluate(env, policy, task, level="final", n=N_EVAL, seed=EVAL_SEED, record=True, on_episode=None, verbose=True):
+def evaluate(env, policy, task, n=N_EVAL, seed=EVAL_SEED, record=True, on_episode=None, verbose=True):
     """Runs the protocol; on_episode(k, result) is called after every episode (result has `frames` when
     record=True) so callers can save videos and traces. Returns (summary, rows)."""
     S = starts(task, n, seed)
     rows, t0 = [], time.time()
-    strict, api.STRICT_STAGES = api.STRICT_STAGES, False     # held-out: a stage verifier's FAIL is recorded, not a stop
-    try:
-        for k, s0 in enumerate(S):
-            try:
-                r = api.run_episode(env, s0, policy, level=level, seed=20_000 + k, record=record)
-                if on_episode is not None:
-                    on_episode(k, r)
-            except api.LevelError as e:
-                r = dict(success=False, safety=False, timeout=False, steps=0, error=str(e), d_asm=float("nan"))
-            rows.append(dict(trial=k, success=bool(r["success"]), safety=bool(r.get("safety", False)),
-                             timeout=bool(r.get("timeout", False)), steps=int(r.get("steps", 0)),
-                             time_s=round(int(r.get("steps", 0)) * DT, 2), error=r.get("error"),
-                             d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2)))
-            if verbose and (k + 1) % 10 == 0:
-                print(f"[eval] {k + 1}/{len(S)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
-    finally:
-        api.STRICT_STAGES = strict
+    for k, s0 in enumerate(S):
+        r = api.run_episode(env, s0, policy, seed=20_000 + k, record=record)
+        if on_episode is not None:
+            on_episode(k, r)
+        rows.append(dict(trial=k, success=bool(r["success"]), safety=bool(r.get("safety", False)),
+                         timeout=bool(r.get("timeout", False)), steps=int(r.get("steps", 0)),
+                         time_s=round(int(r.get("steps", 0)) * DT, 2), error=r.get("error"),
+                         d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2)))
+        if verbose and (k + 1) % 10 == 0:
+            print(f"[eval] {k + 1}/{len(S)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
     ok = [x for x in rows if x["success"]]
-    summary = dict(task=task, level=level, horizon_s=env.ecfg.horizon_s, seed=seed,
+    summary = dict(task=task, horizon_s=env.ecfg.horizon_s, seed=seed,
                    protocol=f"NIST task board, one part: {len(S)} `{START_FAMILY}` starts (part loose on the board, robot at "
                             f"home, gripper open) from seed {seed}; success = keypoints within 1 mm (mesh symmetries allowed)",
                    n=len(rows), n_ok=len(ok), success_rate=round(100 * len(ok) / max(len(rows), 1), 1),
@@ -144,7 +136,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--task", required=True, help="one of " + ", ".join(TASKS))
     ap.add_argument("--policy", required=True, help="a policy.py defining policy(api)")
-    ap.add_argument("--level", default="final", choices=api.LEVELS)
     ap.add_argument("--n", type=int, default=N_EVAL)
     ap.add_argument("--seed", type=int, default=EVAL_SEED, help=f"start-state seed ({EVAL_SEED} = held-out)")
     ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
@@ -167,8 +158,8 @@ def main():
         if vid is not None and len(r.get("frames", ())):
             vid.write(r, ep / "episode.mp4")
 
-    print(f"policy {path}  task {a.task}  level {a.level}  horizon {a.horizon:g} s  seed {a.seed}  n {a.n}", flush=True)
-    summary, rows = evaluate(env, policy, a.task, a.level, n=a.n, seed=a.seed, record=True, on_episode=save)
+    print(f"policy {path}  task {a.task}  horizon {a.horizon:g} s  seed {a.seed}  n {a.n}", flush=True)
+    summary, rows = evaluate(env, policy, a.task, n=a.n, seed=a.seed, record=True, on_episode=save)
     summary["policy"] = str(path)
     (out / "eval.json").write_text(json.dumps(dict(summary=summary, episodes=rows), indent=1))
     print_summary(summary, path.stem)

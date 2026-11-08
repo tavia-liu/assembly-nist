@@ -23,11 +23,13 @@ import imageio.v2 as imageio
 import mujoco
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from scipy.spatial import ConvexHull
 
 import api
 from assembly_policy.sim.env import STATE_SPEC, EnvConfig
-from assembly_policy.sim.tasks import resolve_tasks
-from assembly_policy.viz.demo import NAMES, _separated, fixture_footprints, part_footprint
+from assembly_policy.sim.robot import quat_to_mat
+from assembly_policy.sim.scene import hull_vertices
+from assembly_policy.sim.tasks import BOARD_FIXTURES, TASKS, resolve_tasks, scene_pose
 from eval_protocol import load_module
 from multi_env import MultiPartEnv
 from multi_scene import build_multi_xml
@@ -37,6 +39,45 @@ FPS = 25
 PRESETS = {"board5": "R8+P12+Gm+USB+N8",
            "board10": "R8+R16+P8+P16+Gm+N8+N16+BNC+USB+WP",
            "board20": "all20"}
+
+
+NAMES = {"R4": "4 mm round peg", "R8": "8 mm round peg", "R12": "12 mm round peg", "R16": "16 mm round peg",
+         "P4": "4 mm rectangular peg", "P8": "8 mm rectangular peg", "P12": "12 mm rectangular peg",
+         "P16": "16 mm rectangular peg", "Gs": "small gear", "Gm": "medium gear", "Gl": "large gear",
+         "N4": "M4 nut", "N8": "M8 nut", "N12": "M12 nut", "N16": "M16 nut", "BNC": "BNC connector",
+         "DSUB": "D-sub connector", "RJ45": "RJ45 connector", "USB": "USB-A connector", "WP": "waterproof connector"}
+PART_RGBA = [1.0, 0.5, 0.05, 1]
+FIX_RGBA = [0.15, 0.35, 0.85, 1]
+
+
+# ------------------------------------------------------------------ layout
+def _polygon(points_xy):
+    p = np.asarray(points_xy)[:, :2]
+    return p[ConvexHull(p).vertices]
+
+
+def _separated(a, b, margin):
+    """Separating-axis test for two convex polygons with a clearance margin."""
+    for poly in (a, b):
+        e = np.roll(poly, -1, 0) - poly
+        normals = np.c_[e[:, 1], -e[:, 0]] / np.linalg.norm(e, axis=1, keepdims=True)
+        pa, pb = a @ normals.T, b @ normals.T
+        if ((pa.max(0) + margin < pb.min(0)) | (pb.max(0) + margin < pa.min(0))).any():
+            return True
+    return False
+
+
+def part_footprint(task, pos, quat):
+    v = hull_vertices(TASKS[task].part_asset)
+    return _polygon(pos + v @ quat_to_mat(quat).T)
+
+
+def fixture_footprints():
+    out = []
+    for prim, stem in BOARD_FIXTURES.items():
+        pos, quat = scene_pose(prim)
+        out.append(_polygon(pos + hull_vertices(stem) @ quat_to_mat(quat).T))
+    return out
 
 
 def choose_layout(tasks, sp, rng, margin=0.006, pool_n=16):
@@ -127,7 +168,7 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
         t0 = int(env.t[0])
         err, tries = None, 0
         while True:                                   # a safety stop (velocity limit) ends the attempt, not the part
-            ap = api.AssemblyAPI(env, rng, level="final", record=True)
+            ap = api.AssemblyAPI(env, rng, record=True)
             try:
                 if (i > 0 or tries > 0) and hasattr(policy_mod, "recover"):
                     policy_mod.recover(ap)
@@ -146,7 +187,7 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
         d_mm = round(float(env.assembly_distance(t)[0]) * 1000, 2)
         if out_["success"] and hasattr(policy_mod, "finish") and not out_.get("timeout"):
             env.scoring = False                       # the part is seated: press, release, lift (no re-trigger)
-            ap2 = api.AssemblyAPI(env, rng, level="final", record=True)
+            ap2 = api.AssemblyAPI(env, rng, record=True)
             try:
                 policy_mod.finish(ap2)
             except api.EpisodeOver:
