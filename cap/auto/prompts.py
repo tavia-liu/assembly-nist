@@ -5,7 +5,8 @@ SENSING = {
               "where the part is: use api.camera() and write your own vision, or api.locate_part(), the tracker built "
               "on them.",
     "oracle": "This is the ORACLE ablation: api.observe() returns the part's exact pose (part_pos, part_quat) at every "
-              "step, and api.locate_part() returns the same exact pose. There is no camera; the pose is simply known.",
+              "step, and api.locate_part() returns the same exact pose. The two cameras (api.camera(), a fixed one over "
+              "the board and one on the wrist) are still there for anything else you want to see.",
 }
 
 BRIEF = """\

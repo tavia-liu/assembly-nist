@@ -81,9 +81,9 @@ class AssemblyAPI:
         # servo step would re-open the fingers and drop the part
         self.grip_open = bool(env.grip_cmd[0] > 0)
         self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
-        self.perception = PERCEPTION
+        self.perception = PERCEPTION                                    # "camera" | "oracle" (cameras + exact pose)
         self._perc, self._perc_cache, self._views_cache, self._perc_err = None, None, None, []
-        if self.perception == "camera":
+        if self.perception in ("camera", "oracle"):
             from perception import PartPerceiver
             if hasattr(env, "tasks"):                                   # multi-part board (cap/multi_env.py)
                 from multi_scene import build_multi_xml
@@ -96,7 +96,7 @@ class AssemblyAPI:
         """(pos, quat) of the part as the policy may know it: the camera estimate, or the simulator's in oracle mode."""
         s = self.env.state[0]
         true_p, true_q = s[self.env.sp[:3]].copy(), s[self.env.sp[3:7]].copy()
-        if self._perc is None:
+        if self._perc is None or self.perception == "oracle":
             return true_p, true_q, None
         if self._perc_cache is None or self._perc_cache[0] != int(self.env.t[0]):
             approach = self.tm.fk.forward(self.env.state[:1, self.env.sq])["tcp_R"][0][:, 2]
@@ -163,7 +163,7 @@ class AssemblyAPI:
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
         J = self._jacobian()
         tau_ext, wrench = self._external_load(J)
-        oracle = {} if self._perc is not None else dict(part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy())
+        oracle = {} if self.perception == "camera" else dict(part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy())
         return dict(
             t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2),
             time_left=round(float(self.env.horizon - self.env.t[0]) * self.env.ecfg.control_dt, 2),
@@ -186,7 +186,7 @@ class AssemblyAPI:
         cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world. 320x240, no noise."""
         self._require("camera")
         if self._perc is None:
-            raise RuntimeError("camera() needs CAP_PERCEPTION=camera")
+            raise RuntimeError("camera() needs CAP_PERCEPTION=camera or oracle")
         return {n: dict(v) for n, v in self._views().items()}
 
     def locate_part(self):
@@ -352,8 +352,6 @@ class AssemblyAPI:
 def spec(level="grasp"):
     """The API documentation a policy is given, rendered from _LEVEL_OF so it cannot drift."""
     allowed = [n for n, lv in _LEVEL_OF.items() if LEVELS.index(lv) <= LEVELS.index(level)]
-    if PERCEPTION == "oracle":
-        allowed = [n for n in allowed if n != "camera"]
     lines = [f"API level {level!r}. You may call ONLY these methods on `api`:", ""]
     for name in allowed:
         fn = getattr(AssemblyAPI, name)
@@ -363,7 +361,7 @@ def spec(level="grasp"):
                                           "tracker built on them (locate_part()).",
                                           "ORACLE mode: part_pos [3] and part_quat [4] are the simulator's exact part pose."),
                    "locate_part": "ORACLE mode: (pos [3], quat [4], None), the simulator's exact part pose (the same as "
-                                  "observe()['part_pos'/'part_quat'])."}.get(name, doc)
+                                  "observe()['part_pos'/'part_quat']); no tracker is involved."}.get(name, doc)
         import inspect
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]
@@ -372,7 +370,7 @@ def spec(level="grasp"):
             "locate_part() (the provided tracker)." if PERCEPTION != "oracle" else
             "ORACLE MODE (ablation): observe() also returns part_pos [3] and part_quat [4], the simulator's exact pose of "
             "the part frame (the frame the CAD model and the keypoints are defined in), and locate_part() returns that "
-            "same exact pose with conf=None. There is no camera().")
+            "same exact pose with conf=None. camera() still works (images you may use for anything else).")
     lines += ["", "Calling anything else raises LevelError. There is no insert/align/reorient/screw "
                   "primitive; the assembly strategy is yours to compute. " + pose,
               "`api.EpisodeOver` is raised as soon as the episode ends -- let it propagate."]
