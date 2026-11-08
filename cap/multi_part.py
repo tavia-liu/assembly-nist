@@ -116,7 +116,7 @@ def main():
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     tasks = resolve_tasks(a.tasks)
-    out = Path(a.out or ROOT / "cap/runs/multi" / f"{a.policy}_{'+'.join(tasks)}")
+    out = Path(a.out or ROOT / "cap/runs/rl/multi" / f"{a.policy}_{'+'.join(tasks)}")
     out.mkdir(parents=True, exist_ok=True)
     policy_mod = importlib.import_module(a.policy)
     allres = [run_seed(s, tasks, policy_mod, a, out) for s in range(a.seed, a.seed + a.n_seeds)]

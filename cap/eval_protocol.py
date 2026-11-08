@@ -6,7 +6,7 @@ is at its home configuration with the gripper open (reset family `board`). Start
 training bank the loop debugs on).
 Reported: success rate and completion time of the successful episodes.
 
-  PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/fixloop/R16_agent     # best round
+  PYTHONPATH=.:cap python cap/eval_protocol.py --run-dir cap/runs/agent_loop/R16_agent     # best round
   PYTHONPATH=.:cap python cap/eval_protocol.py --policy <path>/policy.py
 """
 from __future__ import annotations
@@ -91,7 +91,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="R16")
     ap.add_argument("--policy", default=None, help="a policy.py; default = best round in --run-dir")
-    ap.add_argument("--run-dir", default="cap/runs/fixloop/R16_agent")
+    ap.add_argument("--run-dir", default="cap/runs/agent_loop/R16_agent")
     ap.add_argument("--level", default="grasp")
     ap.add_argument("--bank-dir", default=str(CAP_BANK_DIR))
     ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n board states of the eval bank)")

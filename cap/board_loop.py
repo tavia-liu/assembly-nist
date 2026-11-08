@@ -153,7 +153,7 @@ def main():
     ap.add_argument("--setup-only", action="store_true", help="create the sandbox and stop (no agent)")
     a = ap.parse_args()
     tasks = resolve_tasks(PRESETS.get(a.tasks, a.tasks))
-    out = Path(a.out or ROOT / f"cap/runs/boardloop/{a.tasks}_agent").resolve()
+    out = Path(a.out or ROOT / f"cap/runs/board_loop/{a.tasks}_agent").resolve()
     if (out / "state.json").exists():
         sys.exit(f"{out} already exists; pick another --out")
     brief = setup(out, a, tasks)

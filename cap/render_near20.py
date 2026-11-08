@@ -1,7 +1,7 @@
 """Videos of the near20 bank starts and of a board-PPO checkpoint rolling out from them.
 
   PYTHONPATH=.:cap MUJOCO_GL=egl python cap/render_near20.py --task P4 --starts 8 --ckpt runs/board_P4/checkpoint.pt --episodes 6
-Writes cap/runs/near20/<task>_starts.mp4 (+ _starts.png contact sheet) and <task>_<ckpt>_rollouts.mp4.
+Writes cap/runs/perception/near20/<task>_starts.mp4 (+ _starts.png contact sheet) and <task>_<ckpt>_rollouts.mp4.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def main():
     ap.add_argument("--ckpt", default=None)
     ap.add_argument("--episodes", type=int, default=6)
     ap.add_argument("--horizon", type=float, default=15.0)
-    ap.add_argument("--out", default=str(ROOT / "cap/runs/near20"))
+    ap.add_argument("--out", default=str(ROOT / "cap/runs/perception/near20"))
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     tasks = resolve_tasks("all20")

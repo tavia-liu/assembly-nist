@@ -17,7 +17,7 @@ from pathlib import Path
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
-    ap.add_argument("--kind", choices=["state", "feat"], required=True)
+    ap.add_argument("--kind", choices=["state", "feat", "pixel"], required=True)
     ap.add_argument("--task", default="P4")
     ap.add_argument("--bank-dir", default="data/banks_near")
     ap.add_argument("--every", type=int, default=1, help="use every k-th kept checkpoint")
@@ -27,7 +27,7 @@ def main():
     a = ap.parse_args()
     run = Path(a.run_dir)
     cks = sorted(run.glob("model_*.pt"))[:: a.every]
-    script = {"state": "cap/eval_state.py", "feat": "cap/eval_feat.py"}[a.kind]
+    script = {"state": "cap/eval_state.py", "feat": "cap/eval_feat.py", "pixel": "cap/eval_pixel.py"}[a.kind]
     rows = []
     for ck in cks:
         rec = {"it": int(ck.stem.split("_")[1])}
@@ -35,7 +35,7 @@ def main():
             out = run / f"eval_{ck.stem}{'_det' if det else ''}.json"
             if not out.exists():
                 cmd = [sys.executable, script, "--ckpt", str(ck), "--task", a.task, "--bank-dir", a.bank_dir, "--nthread", str(a.nthread)]
-                if a.kind == "state":
+                if a.kind in ("state", "pixel"):
                     cmd += ["--video", "0"]
                 if det:
                     cmd.append("--deterministic")

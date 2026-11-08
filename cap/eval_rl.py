@@ -6,8 +6,8 @@ per start, success + completion time. Actions are sampled (as in the AlphaNIST e
 Output per task: <out>/<TASK>/summary.json, episodes.json and videos/epNNN_<ok|fail>.mp4 for the first --record
 episodes (default: all of them).
 
-  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_rl.py --tasks R8 --out cap/runs/rl_eval/e8192_it12500
-  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_rl.py --tasks all20 --out cap/runs/rl_eval/e8192_it12500
+  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_rl.py --tasks R8 --out cap/runs/rl/eval/e8192_it12500
+  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_rl.py --tasks all20 --out cap/runs/rl/eval/e8192_it12500
 """
 from __future__ import annotations
 
@@ -115,7 +115,7 @@ def main():
     ap.add_argument("--deterministic", action="store_true", help="mean actions (default: sampled, as in the paper)")
     ap.add_argument("--nthread", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 8)))
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--out", default=str(ROOT / "cap/runs/rl_eval/e8192_it12500"))
+    ap.add_argument("--out", default=str(ROOT / "cap/runs/rl/eval/e8192_it12500"))
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     args = torch.load(a.ckpt, map_location="cpu", weights_only=False)["args"]

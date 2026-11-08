@@ -25,9 +25,9 @@ for _ in range(20):
 print(f"capture+estimate {(time.time() - t0) / 20 * 1000:.1f} ms per step", flush=True)
 try:
     from PIL import Image
-    Image.fromarray(np.concatenate([views["global"]["rgb"], views["wrist"]["rgb"]], 1)).save(f"cap/runs/perc_{task}_rgb.png")
+    Image.fromarray(np.concatenate([views["global"]["rgb"], views["wrist"]["rgb"]], 1)).save(f"cap/runs/perception/perc_{task}_rgb.png")
     m = np.concatenate([views["global"]["mask"], views["wrist"]["mask"]], 1)
-    Image.fromarray((m * 255).astype(np.uint8)).save(f"cap/runs/perc_{task}_mask.png")
+    Image.fromarray((m * 255).astype(np.uint8)).save(f"cap/runs/perception/perc_{task}_mask.png")
 except Exception as e:
     print("no debug image:", e)
 policy = load_policy(Path("cap/hybrid_rl.py"))

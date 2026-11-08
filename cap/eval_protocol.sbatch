@@ -10,5 +10,5 @@
 set -euo pipefail
 cd /engrfs/project/chongjie/buzhao/autodeco/assembly-nist
 export PYTHONPATH=.:cap
-.venv/bin/python -u cap/eval_protocol.py --task "${TASK:-R16}" --run-dir "${RUN_DIR:-cap/runs/fixloop/R16_agent}" \
+.venv/bin/python -u cap/eval_protocol.py --task "${TASK:-R16}" --run-dir "${RUN_DIR:-cap/runs/agent_loop/R16_agent}" \
     --level "${LEVEL:-grasp}" ${POLICY:+--policy "$POLICY"}

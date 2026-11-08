@@ -30,5 +30,5 @@ for k in starts:
         row.append(crop)
         print(f"start {k} {name}: {int(v['mask'].sum())} px, mask bbox x {xs.min() if len(xs) else -1}-{xs.max() if len(xs) else -1} y {ys.min() if len(ys) else -1}-{ys.max() if len(ys) else -1}", flush=True)
     tiles.append(np.concatenate(row, 1))
-Image.fromarray(np.concatenate(tiles, 0)).save(f"cap/runs/fpose_views_{task}.png")
-print("wrote", f"cap/runs/fpose_views_{task}.png")
+Image.fromarray(np.concatenate(tiles, 0)).save(f"cap/runs/perception/fpose_views_{task}.png")
+print("wrote", f"cap/runs/perception/fpose_views_{task}.png")

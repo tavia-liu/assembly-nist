@@ -186,7 +186,7 @@ def main():
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     tasks = resolve_tasks(PRESETS.get(a.tasks, a.tasks))
-    out = Path(a.out or ROOT / "cap/runs/board" / f"{a.policy}_{a.order}_{'+'.join(tasks)}{a.tag}")
+    out = Path(a.out or ROOT / "cap/runs/rl/board_greedy" / f"{a.policy}_{a.order}_{'+'.join(tasks)}{a.tag}")
     out.mkdir(parents=True, exist_ok=True)
     policy_mod = importlib.import_module(a.policy)
     e1 = api.make_env(tasks[0]); sp_single = e1.sp.copy(); e1.close()

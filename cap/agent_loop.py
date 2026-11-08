@@ -196,7 +196,7 @@ def main():
                     help="old single-file policy.py mode (default: staged plan.md + stages/NN_<name>.py)")
     ap.add_argument("--setup-only", action="store_true", help="create the sandbox and stop (no agent)")
     a = ap.parse_args()
-    out = Path(a.out or ROOT / f"cap/runs/fixloop/{a.task}_agent").resolve()
+    out = Path(a.out or ROOT / f"cap/runs/agent_loop/{a.task}_agent").resolve()
     if (out / "state.json").exists():
         sys.exit(f"{out} already exists; pick another --out")
     brief = setup(out, a)
