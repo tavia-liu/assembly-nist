@@ -27,6 +27,7 @@ import numpy as np
 
 import api
 import eval_protocol
+from perception import on_render_thread
 from assembly_policy.sim.env import EnvConfig
 from assembly_policy.sim.tasks import TASKS, resolve_tasks
 from multi_board import PRESETS, choose_layout, render as render_board
@@ -59,8 +60,7 @@ class Single:
 
     def save_video(self, path: Path):
         frames = np.asarray(self.api.frames + [self.env.state[0].copy()])
-        with _BUILD:
-            eval_protocol.Video(self.task).write(dict(frames=frames, success=self.api.outcome.get("success", False)), path)
+        on_render_thread(lambda: eval_protocol.Video(self.task).write(dict(frames=frames, success=self.api.outcome.get("success", False)), path))
 
     def close(self):
         self.env.close()
@@ -108,8 +108,7 @@ class Board:
         final = self.env.assembled()
         stages = [(i - 1, f"{p}: {'seated' if final[p]['ok'] else 'not seated'}", bool(final[p]["ok"]))
                   for i, p in self.marks[1:]] + [(len(self.frames) - 1, f"{sum(v['ok'] for v in final.values())}/{len(self.tasks)} seated", True)]
-        with _BUILD:
-            render_board(self.tasks, self.frames, stages, str(path))
+        on_render_thread(render_board, self.tasks, self.frames, stages, str(path))
 
     def close(self):
         self.env.close()

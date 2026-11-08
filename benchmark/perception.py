@@ -16,6 +16,7 @@ import hashlib
 import math
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET
 from multiprocessing.connection import Client
 
@@ -33,7 +34,16 @@ W, H = (int(v) for v in os.environ.get("CAP_CAM_RES", "1280x960").split("x"))   
 WW, WH = (int(v) for v in os.environ.get("CAP_WRIST_RES", "640x480").split("x"))         # wrist camera
 FPOSE_PORT = int(os.environ.get("FPOSE_PORT", "8130"))
 _RENDERERS = {}        # model hash -> (model, data, renderer): one EGL context per model per process
-_RENDER_LOCK = threading.Lock()   # the EGL contexts are shared by every episode of the process: render one at a time
+# An EGL context can be current in one thread only, so every GL call of the process (renderer creation, capture,
+# video rendering) runs on this single thread; other threads wait for their result.
+_RENDER_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix="render")
+
+
+def on_render_thread(fn, *args, **kwargs):
+    """Run fn on the process's render thread and return its result (re-raises its exception)."""
+    if threading.current_thread().name.startswith("render"):
+        return fn(*args, **kwargs)
+    return _RENDER_THREAD.submit(fn, *args, **kwargs).result()
 
 
 def add_cameras(xml: str) -> str:
@@ -148,11 +158,13 @@ class FPoseTracker:
 class PartPerceiver:
     def __init__(self, xml: str, part_body: str = "part", part_mesh: str = "", w=W, h=H, seed=0):
         key = hashlib.sha1(xml.encode()).hexdigest()
-        with _RENDER_LOCK:
+
+        def build():
             if key not in _RENDERERS:
                 m = mujoco.MjModel.from_xml_string(add_cameras(xml))
                 _RENDERERS[key] = (m, mujoco.MjData(m), {"global": mujoco.Renderer(m, h, w), "global2": mujoco.Renderer(m, h, w),
                                                          "wrist": mujoco.Renderer(m, WH, WW)})
+        on_render_thread(build)
         self.m, self.d, self.rs = _RENDERERS[key]
         self.cams = {n: mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_CAMERA, n) for n in ("global", "global2", "wrist")}
         self.body = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_BODY, part_body)
@@ -176,10 +188,11 @@ class PartPerceiver:
     def capture(self, state):
         """The three cameras at this physics state. depth in metres (z along the optical axis); the camera frame has
         x right, y up, z backwards (MuJoCo): world = cam_pos + cam_R @ [(u+.5-cx)/f*d, -(v+.5-cy)/f*d, -d]."""
-        with _RENDER_LOCK:
+        def cap():
             mujoco.mj_setState(self.m, self.d, state, STATE_SPEC)
             mujoco.mj_forward(self.m, self.d)
             return {n: self._view(n, c) for n, c in self.cams.items()}
+        return on_render_thread(cap)
 
     @staticmethod
     def points(view, mask=None):
