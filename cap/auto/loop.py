@@ -271,7 +271,7 @@ class Loop:
             matcher="Read|Edit|Write|MultiEdit|Glob|Grep|Bash",
             hooks=[dict(type="command", command=f"python3 {run / 'bin' / 'guard.py'}")])])), indent=1))
         schedule = [int(x) for x in a.schedule.split(",")]
-        self.st = dict(task=a.task, level=a.level, bank_dir=str(a.bank_dir), schedule=schedule, stage=0, round=0,
+        self.st = dict(task=a.task, level=a.level, perception=api.PERCEPTION, bank_dir=str(a.bank_dir), schedule=schedule, stage=0, round=0,
                        max_rounds=a.rounds, horizon_s=a.horizon, phase="brief", session=None,
                        model=a.model, audit_model=a.audit_model, started=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.save()
@@ -282,7 +282,8 @@ class Loop:
         const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
         (run / "BRIEF.md").write_text(P.BRIEF.format(
             task=a.task, horizon=a.horizon, schedule=" -> ".join(map(str, schedule)), last=schedule[-1],
-            rounds=a.rounds, spec=api.spec(a.level), const=json.dumps(const), max_exp=a.max_experiments))
+            rounds=a.rounds, spec=api.spec(a.level), const=json.dumps(const), max_exp=a.max_experiments,
+            sensing=P.SENSING[api.PERCEPTION]))
 
     def save(self, **kw):
         self.st.update(kw)

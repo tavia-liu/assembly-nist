@@ -352,6 +352,8 @@ class AssemblyAPI:
 def spec(level="grasp"):
     """The API documentation a policy is given, rendered from _LEVEL_OF so it cannot drift."""
     allowed = [n for n, lv in _LEVEL_OF.items() if LEVELS.index(lv) <= LEVELS.index(level)]
+    if PERCEPTION == "oracle":
+        allowed = [n for n in allowed if n != "camera"]
     lines = [f"API level {level!r}. You may call ONLY these methods on `api`:", ""]
     for name in allowed:
         fn = getattr(AssemblyAPI, name)
@@ -360,9 +362,13 @@ def spec(level="grasp"):
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]
         lines.append(f"  api.{name}{sig}\n      {doc}")
+    pose = ("The part's pose is never given: see it through camera() (write your own vision on the images) or "
+            "locate_part() (the provided tracker)." if PERCEPTION != "oracle" else
+            "ORACLE MODE (ablation): observe() also returns part_pos [3] and part_quat [4], the simulator's exact pose of "
+            "the part frame (the frame the CAD model and the keypoints are defined in), and locate_part() returns that "
+            "same exact pose with conf=None. There is no camera().")
     lines += ["", "Calling anything else raises LevelError. There is no insert/align/reorient/screw "
-                  "primitive; the assembly strategy is yours to compute. The part's pose is never given: see it "
-                  "through camera() (write your own vision on the images) or locate_part() (the provided tracker).",
+                  "primitive; the assembly strategy is yours to compute. " + pose,
               "`api.EpisodeOver` is raised as soon as the episode ends -- let it propagate."]
     return "\n".join(lines)
 
