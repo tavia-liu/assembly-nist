@@ -7,6 +7,9 @@ BatchNorm layers are frozen (ImageNet statistics): PPO minibatches are on-policy
 """
 from __future__ import annotations
 
+import contextlib
+import os
+
 import torch
 import torch.nn as nn
 import torchvision
@@ -48,17 +51,21 @@ class ResNetEncoder(nn.Module):
         self.register_buffer("mean", torch.tensor(_MEAN).view(1, 3, 1, 1))
         self.register_buffer("std", torch.tensor(_STD).view(1, 3, 1, 1))
         self.n_cam, self.res, self.freeze = n_cam, res, freeze
+        self.amp = bool(int(os.environ.get("CAP_AMP", "1")))     # bf16 autocast for the trunk (A40); heads stay fp32
 
     def forward(self, img):
         """img uint8 [B, n_cam, H, W, 3] -> latent [B, out]."""
         B = img.shape[0]
         x = img.permute(0, 1, 4, 2, 3).reshape(B * self.n_cam, 3, img.shape[2], img.shape[3]).float() / 255.0
         x = (x - self.mean) / self.std
-        if self.freeze:
-            with torch.no_grad():
+        ctx = torch.autocast("cuda", dtype=torch.bfloat16) if (self.amp and x.is_cuda) else contextlib.nullcontext()
+        with ctx:
+            if self.freeze:
+                with torch.no_grad():
+                    h = self.trunk(x)
+            else:
                 h = self.trunk(x)
-        else:
-            h = self.trunk(x)
+        h = h.float()
         f = torch.cat([self.ss(h), h.mean((2, 3))], -1).reshape(B, -1)
         return torch.tanh(self.ln(self.proj(f)))
 
