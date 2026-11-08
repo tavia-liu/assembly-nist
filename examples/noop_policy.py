@@ -2,7 +2,7 @@
 
 A policy is a Python file defining policy(api); the methods of `api` are listed by
 
-    PYTHONPATH=.:cap python -c "import api; print(api.spec())"
+    PYTHONPATH=.:benchmark python -c "import api; print(api.spec())"
 
 api.EpisodeOver is raised when the episode ends (success, safety stop or the time limit): let it propagate.
 """

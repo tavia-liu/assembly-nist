@@ -13,4 +13,4 @@ MUJOCO_LOG.TXT
 data/
 runs/
 *.log
-cap/runs/
+benchmark/runs/

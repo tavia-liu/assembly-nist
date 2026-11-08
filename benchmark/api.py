@@ -53,7 +53,7 @@ class AssemblyAPI:
         self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
         # the cameras and the pose tracker on them: the only way the part reaches a policy
         from perception import PartPerceiver
-        if hasattr(env, "tasks"):                                       # multi-part board (cap/multi_env.py)
+        if hasattr(env, "tasks"):                                       # multi-part board (benchmark/multi_env.py)
             from multi_scene import build_multi_xml
             xml, body = build_multi_xml(env.tasks, visual=True), f"part_{self.task.name}"
         else:

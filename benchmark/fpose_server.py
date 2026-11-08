@@ -1,6 +1,6 @@
 """FoundationPose as a local service (run inside the `fpose` conda env; the simulator talks to it over a socket).
 
-    conda run -n fpose python cap/fpose_server.py --port 8130
+    conda run -n fpose python benchmark/fpose_server.py --port 8130
 
 Protocol (multiprocessing.connection, pickle): request dict(mesh=<obj path>, cmd="register"|"track", K, rgb, depth
 (metres, 0 = invalid), mask (register only), init_pose (track only, optional 4x4 cam<-mesh to seed the track),

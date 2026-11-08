@@ -2,7 +2,7 @@
 
 Three cameras -- two fixed over the board (front-right, front-left) and the wrist camera (robosuite eye-in-hand) --
 give RGB, metric depth, an instance mask of the part (the simulator's segmentation stands in for a segmentation
-model), intrinsics and the camera pose. `estimate()` runs FoundationPose (cap/fpose_server.py, a local service on
+model), intrinsics and the camera pose. `estimate()` runs FoundationPose (benchmark/fpose_server.py, a local service on
 the GPU) on the camera that sees the part best: registered from RGB-D + mask + the part's CAD mesh on the first
 sighting, tracked frame to frame afterwards. Only images, the estimate and its confidence reach the policy.
 
@@ -59,7 +59,7 @@ def add_cameras(xml: str) -> str:
 
 
 class FPoseTracker:
-    """Client of cap/fpose_server.py (FoundationPose in its own conda env): register on the first sighting with
+    """Client of benchmark/fpose_server.py (FoundationPose in its own conda env): register on the first sighting with
     the mask, then track_one per step; the track follows the camera that sees the part best (wrist when it sees
     enough of it, else the fixed camera) and is re-seeded in the other camera's frame on a switch."""
     F = np.diag([1.0, -1.0, -1.0])        # MuJoCo camera (x right, y up, z back) -> CV camera (x right, y down, z forward)

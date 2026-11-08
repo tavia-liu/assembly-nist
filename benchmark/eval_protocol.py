@@ -4,11 +4,13 @@ Protocol. The part lies loose on the board at a random settled pose, the robot i
 the gripper open (reset family `board`); the policy has --horizon seconds (default 40) to assemble it. Success:
 both of the part's keypoints within 1 mm of their goal, for whichever of the part's mesh symmetries fits best (a
 rod seated either way up counts). Starts come from the simulator's reset generator seeded by --seed: seed 1000
-(the default) is the held-out set; develop on other seeds. Every episode is rendered to an mp4.
+(the default) is the held-out set; develop on other seeds. Every episode is rendered to an mp4. The policy file
+is checked before it runs: it may use the public methods of `api` only (no `api.env`, no private attributes, no
+simulator imports).
 Reported: success rate, completion time of the successful episodes, timeouts, safety stops, policy errors.
 
-  MUJOCO_GL=egl PYTHONPATH=.:cap python cap/eval_protocol.py --task R8 --policy my_policy.py --out runs/eval/R8
-  (cap/fpose_server.py must be listening on $FPOSE_PORT; cap/eval.sbatch starts it on the job's GPU)
+  MUJOCO_GL=egl PYTHONPATH=.:benchmark python benchmark/eval_protocol.py --task R8 --policy my_policy.py --out runs/eval/R8
+  (benchmark/fpose_server.py must be listening on $FPOSE_PORT; benchmark/eval.sbatch starts it on the job's GPU)
 """
 from __future__ import annotations
 
@@ -32,7 +34,21 @@ DT = 0.04
 FPS = 25
 
 
+FORBIDDEN = ("api.env", "api._", "mujoco", "assembly_policy", "perception", "fpose", "multi_env")
+
+
+def check_policy_source(path: Path):
+    """A policy may use the public methods of `api` and nothing else: no simulator state, no private attributes,
+    no imports of the simulator. Raises ValueError naming the offending line."""
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        code = line.split("#")[0]
+        hit = next((f for f in FORBIDDEN if f in code), None)
+        if hit:
+            raise ValueError(f"{path}:{n}: policies may not use {hit!r}: {line.strip()}")
+
+
 def load_module(path: Path):
+    check_policy_source(path)
     spec = importlib.util.spec_from_file_location(f"policy_{path.stem}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

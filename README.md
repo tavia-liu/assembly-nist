@@ -5,7 +5,7 @@ sees the part **only through cameras**. The simulator's part pose is never expos
 exists on a real cell with two fixed RGB-D cameras and a wrist camera.
 
 The simulator (`assembly_policy/sim`, `assets/`, `plugin/`) comes from
-[AssembleNIST](https://github.com/suniique/assembly-nist) by Tao Sun; the benchmark layer is `cap/`.
+[AssembleNIST](https://github.com/suniique/assembly-nist) by Tao Sun; the benchmark layer is `benchmark/`.
 
 ## Task
 
@@ -28,7 +28,7 @@ and the goal pose (`goal_pos`, `goal_quat` in `api.observe()`).
 ## What a policy observes
 
 ```
-PYTHONPATH=.:cap python -c "import api; print(api.spec())"
+PYTHONPATH=.:benchmark python -c "import api; print(api.spec())"
 ```
 
 | call | gives | real-cell counterpart |
@@ -47,12 +47,15 @@ Never exposed: the simulator's part pose and assembly distance. There is no inse
 
 ## Running an evaluation
 
-A policy is a Python file defining `policy(api)` (see `examples/noop_policy.py`). The held-out protocol runs 100
-`board` starts from seed 1000 and writes `eval.json` plus one video per episode:
+A policy is a Python file defining `policy(api)` (see `examples/noop_policy.py`). It may use the public methods of
+`api` and nothing else: the evaluation refuses a policy file that touches `api.env`, private attributes or the
+simulator's modules. How the policy was obtained is unconstrained (hand-written code, learned components trained
+in this simulator, anything else). The held-out protocol runs 100 `board` starts from seed 1000 and writes
+`eval.json` plus one video per episode:
 
 ```
-sbatch --export=ALL,TASK=R8,POLICY=path/to/policy.py cap/eval.sbatch     # starts the FoundationPose service, then:
-MUJOCO_GL=egl PYTHONPATH=.:cap python cap/eval_protocol.py --task R8 --policy path/to/policy.py
+sbatch --export=ALL,TASK=R8,POLICY=path/to/policy.py benchmark/eval.sbatch     # starts the FoundationPose service, then:
+MUJOCO_GL=egl PYTHONPATH=.:benchmark python benchmark/eval_protocol.py --task R8 --policy path/to/policy.py
 ```
 
 Anything that renders (cameras, videos) needs a GPU: `gpu.sbatch` is the template for running any command on one
@@ -63,7 +66,7 @@ Develop on other seeds (`--seed 0`); seed 1000 is for reporting.
 Whole board (several parts physically on the board, one continuous episode, 40 s per part, scored at the end):
 
 ```
-MUJOCO_GL=egl PYTHONPATH=.:cap python cap/multi_board.py --tasks board20 --policy path/to/policy.py --n-seeds 10
+MUJOCO_GL=egl PYTHONPATH=.:benchmark python benchmark/multi_board.py --tasks board20 --policy path/to/policy.py --n-seeds 10
 ```
 
 ## Setup
@@ -72,9 +75,9 @@ MUJOCO_GL=egl PYTHONPATH=.:cap python cap/multi_board.py --tasks board20 --polic
 python -m venv .venv && .venv/bin/pip install -e .
 ```
 
-`locate_part()` needs the FoundationPose service, `cap/fpose_server.py`, running on a GPU in a conda env with
+`locate_part()` needs the FoundationPose service, `benchmark/fpose_server.py`, running on a GPU in a conda env with
 [FoundationPose](https://github.com/NVlabs/FoundationPose) installed (`FOUNDATIONPOSE_DIR`); it listens on
-`$FPOSE_PORT` (default 8130). `cap/eval.sbatch` starts it for the job. Rendering uses EGL (`MUJOCO_GL=egl`).
+`$FPOSE_PORT` (default 8130). `benchmark/eval.sbatch` starts it for the job. Rendering uses EGL (`MUJOCO_GL=egl`).
 
 ## Layout
 
@@ -82,11 +85,11 @@ python -m venv .venv && .venv/bin/pip install -e .
 assembly_policy/sim/   simulator: scene, robot, 20 tasks, reset generator, symmetric success metric
 assets/                board, fixtures and part meshes (NIST ATB1 CAD), SDF grids, collision proxies
 plugin/                MuJoCo SDF collision plugin
-cap/api.py             the policy-facing API; api.spec() renders its docs
-cap/perception.py      cameras, masks, depth; FoundationPose client
-cap/fpose_server.py    FoundationPose as a local service
-cap/eval_protocol.py   single-part held-out protocol (seeded starts, videos); cap/eval.sbatch runs it on a GPU
+benchmark/api.py             the policy-facing API; api.spec() renders its docs
+benchmark/perception.py      cameras, masks, depth; FoundationPose client
+benchmark/fpose_server.py    FoundationPose as a local service
+benchmark/eval_protocol.py   single-part held-out protocol (seeded starts, videos); benchmark/eval.sbatch runs it on a GPU
 gpu.sbatch             GPU job template for any command (starts the FoundationPose service)
-cap/multi_board.py, multi_env.py, multi_scene.py   whole-board protocol
+benchmark/multi_board.py, multi_env.py, multi_scene.py   whole-board protocol
 examples/              a minimal policy
 ```

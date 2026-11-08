@@ -1,4 +1,4 @@
-"""The NIST task-board benchmark with several parts physically on the board at once (cap/multi_env.py).
+"""The NIST task-board benchmark with several parts physically on the board at once (benchmark/multi_env.py).
 
 All parts of --tasks lie at random settled board poses (non-overlapping), the robot starts at home with the
 gripper open, and a policy assembles them one after another in one continuous episode in a random order (--order
@@ -9,7 +9,7 @@ and total time; per-part stage outcomes are logged too.
 
 Output per seed: <out>/seedNN.json and <out>/seedNN.mp4 (first --video-seeds seeds); <out>/summary.json.
 
-  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/multi_board.py --tasks board20 --policy my_policy.py --n-seeds 10
+  PYTHONPATH=.:benchmark MUJOCO_GL=egl python benchmark/multi_board.py --tasks board20 --policy my_policy.py --n-seeds 10
 """
 from __future__ import annotations
 
