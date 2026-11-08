@@ -358,6 +358,10 @@ def spec(level="grasp"):
     for name in allowed:
         fn = getattr(AssemblyAPI, name)
         doc = " ".join((fn.__doc__ or "").split())
+        if PERCEPTION == "oracle" and name == "locate_part":
+            doc = ("Exact pose of the part: (pos [3], quat [4], conf), pos/quat taken from the simulator (oracle ablation, "
+                   "not a camera estimate); conf = dict(n_points seen by the cameras, rms_mm, stale, views) as the tracker "
+                   "would report it.")
         import inspect
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]
