@@ -170,7 +170,7 @@ def policy(api):
     def stage_done(ok, evidence=""):
         api._rec("stage_done", stage=cur[0], ok=bool(ok), evidence=str(evidence)[:200])
         print(f"[STAGE {{cur[0]}}] {{'PASS' if ok else 'FAIL'}} {{evidence}}", flush=True)
-        if not ok and cur[1]:
+        if not ok and cur[1] and getattr(api, "strict_stages", True):
             raise StageFailed(cur[0])
 
     ns["stage_done"] = stage_done
@@ -627,7 +627,7 @@ def main():
     ap.add_argument("--task", default="R8")
     ap.add_argument("--schedule", default="2,5,10,15,20", help="debug-set sizes; next size when a round passes every start")
     ap.add_argument("--rounds", type=int, default=25)
-    ap.add_argument("--level", default="grasp")
+    ap.add_argument("--level", default="final")
     ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")
     ap.add_argument("--model", default="claude-opus-5-5[1m]", help="coder")
     ap.add_argument("--audit-model", default="claude-opus-5-5[1m]", help="auditor (fresh session per audit)")

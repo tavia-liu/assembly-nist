@@ -57,6 +57,7 @@ def evaluate(env, policy, task, level, bank_dir=CAP_BANK_DIR, n=N_EVAL, verbose=
     bank = np.load(Path(bank_dir) / f"{task}_eval.npz")
     idx = np.nonzero(bank["family"] == FAMILIES.index(START_FAMILY))[0][:n]
     rows, t0 = [], time.time()
+    strict, api.STRICT_STAGES = api.STRICT_STAGES, False     # held-out: a stage verifier's FAIL is recorded, not a stop
     for k, i in enumerate(idx):
         try:
             r = api.run_episode(env, bank["states"][i], policy, level=level, seed=20_000 + k, record=record)
@@ -70,6 +71,7 @@ def evaluate(env, policy, task, level, bank_dir=CAP_BANK_DIR, n=N_EVAL, verbose=
                          d_asm_mm=round(float(r.get("d_asm", float("nan"))) * 1000, 2)))
         if verbose and (k + 1) % 32 == 0:
             print(f"[eval] {k + 1}/{len(idx)}: {sum(x['success'] for x in rows)} ok  ({time.time() - t0:.0f}s)", flush=True)
+    api.STRICT_STAGES = strict
     ok = [x for x in rows if x["success"]]
     summary = dict(task=task, horizon_s=env.ecfg.horizon_s,
                    protocol=f"NIST task board: full assembly from the first {len(idx)} {START_FAMILY} starts (part loose on the board, robot at home, gripper open) of the frozen eval bank",
@@ -92,7 +94,7 @@ def main():
     ap.add_argument("--task", default="R16")
     ap.add_argument("--policy", default=None, help="a policy.py; default = best round in --run-dir")
     ap.add_argument("--run-dir", default="cap/runs/agent_loop/R16_agent")
-    ap.add_argument("--level", default="grasp")
+    ap.add_argument("--level", default="final")
     ap.add_argument("--bank-dir", default=str(CAP_BANK_DIR))
     ap.add_argument("--n", type=int, default=N_EVAL, help="held-out starts (first n board states of the eval bank)")
     ap.add_argument("--horizon", type=float, default=40.0, help="episode time limit in seconds")

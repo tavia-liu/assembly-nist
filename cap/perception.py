@@ -32,7 +32,7 @@ GLOBAL_CAM2 = dict(pos=(0.80, 0.42, 0.52), lookat=(0.50, 0.0, 0.02), fovy=34.0) 
 WRIST_CAM = dict(pos="0.05 0 0", quat="0 0.707108 0.707108 0", fovy="75")           # robosuite eye_in_hand
 W, H = (int(v) for v in os.environ.get("CAP_CAM_RES", "1280x960").split("x"))            # fixed camera
 WW, WH = (int(v) for v in os.environ.get("CAP_WRIST_RES", "320x240").split("x"))         # wrist camera
-TRACKER = os.environ.get("CAP_TRACKER", "icp")          # icp (built in) | fpose (FoundationPose server, cap/fpose_server.py)
+TRACKER = os.environ.get("CAP_TRACKER", "fpose")          # icp (built in) | fpose (FoundationPose server, cap/fpose_server.py)
 FPOSE_PORT = int(os.environ.get("FPOSE_PORT", "8130"))
 N_MODEL = 600          # surface samples of the CAD mesh
 N_OBS = 1500           # observed points kept per estimate

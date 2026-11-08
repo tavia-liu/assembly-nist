@@ -110,7 +110,7 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
         t0 = int(env.t[0])
         err, tries = None, 0
         while True:                                   # a safety stop (velocity limit) ends the attempt, not the part
-            ap = api.AssemblyAPI(env, rng, level="grasp", record=True)
+            ap = api.AssemblyAPI(env, rng, level="final", record=True)
             try:
                 if i > 0 or tries > 0:
                     policy_mod.recover(ap)
@@ -129,7 +129,7 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
         d_mm = round(float(env.assembly_distance(t)[0]) * 1000, 2)
         if out_["success"] and hasattr(policy_mod, "finish") and not out_.get("timeout"):
             env.scoring = False                       # the part is seated: press, release, lift (no re-trigger)
-            ap2 = api.AssemblyAPI(env, rng, level="grasp", record=True)
+            ap2 = api.AssemblyAPI(env, rng, level="final", record=True)
             try:
                 policy_mod.finish(ap2)
             except api.EpisodeOver:

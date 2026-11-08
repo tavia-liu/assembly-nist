@@ -7,15 +7,15 @@ experiment's prior-knowledge boundary, so the boundary is made explicit and enfo
 
 Three nested levels; a policy declares one and calls nothing above it:
 
-  raw    observe() / step() / constants()        nothing but the simulator
-  kin    + ik() move_to() move_to_joints()       task-agnostic kinematics: identical for all
-           set_gripper() wait()                  20 assemblies and any 7-DoF arm
-  grasp  + grasp_candidates()                    unlabelled antipodal candidates for the part
+  raw    observe() / step() / constants() / camera()   the simulator's robot state and the cameras
+  kin    + ik() move_to() move_to_joints()             task-agnostic kinematics: identical for all
+           set_gripper() wait()                        20 assemblies and any 7-DoF arm
+  final  + locate_part() part_model()                  a 6-DoF pose estimator on the cameras
+                                                       (FoundationPose) and the part's CAD mesh
 
-Withheld at every level: insert() / align() / reorient() / screw(), the grasp sampler's
-`kind` labels ("axial" / "side" / "side_top" -- side_top is the paper's "picks it up near one
-end" finding), and any worded hint about how to assemble. Which candidate to take, how to
-bring a part upright, when to press down: all of that is the policy's job.
+Withheld at every level: the simulator's part pose and assembly distance, insert() / align() /
+reorient() / screw(), grasp candidates, and any worded hint about how to assemble. Where to
+grasp, how to bring a part upright, when to press down: all of that is the policy's job.
 
 `spec(level)` renders the prompt-facing documentation from this same table, so what a policy
 is told it may call cannot drift from what it is actually allowed to call.
@@ -28,21 +28,23 @@ import numpy as np
 import mujoco
 
 from assembly_policy.sim.env import STATE_SPEC, BatchedAssemblyEnv, EnvConfig
-from assembly_policy.sim.resets import ResetGenerator, any_grasp
+from assembly_policy.sim.resets import ResetGenerator
 from assembly_policy.sim.robot import mat_to_quat, quat_mul, quat_to_mat, solve_ik
 from assembly_policy.sim.scene import build_xml
-from assembly_policy.sim.tasks import TASKS, scene_pose
+from assembly_policy.sim.tasks import MESH_DIR, TASKS, load_obj, scene_pose
 
 # "camera": part pose from the two-camera tracker (cap/perception.py); "oracle": the simulator's pose (ablation)
 PERCEPTION = os.environ.get("CAP_PERCEPTION", "camera")
+# held-out evaluation sets this False: a stage verifier's FAIL is recorded but does not stop the policy
+STRICT_STAGES = True
 
-LEVELS = ("raw", "kin", "grasp")
+LEVELS = ("raw", "kin", "final")
 
 # method -> lowest level at which it may be called
 _LEVEL_OF = {
-    "observe": "raw", "step": "raw", "constants": "raw", "camera": "raw", "locate_part": "grasp",
+    "observe": "raw", "step": "raw", "constants": "raw", "camera": "raw",
     "ik": "kin", "move_to": "kin", "move_to_joints": "kin", "set_gripper": "kin", "wait": "kin",
-    "grasp_candidates": "grasp",
+    "locate_part": "final", "part_model": "final",
 }
 
 
@@ -57,7 +59,7 @@ class LevelError(Exception):
 class AssemblyAPI:
     """One episode of one task. A policy drives it through these methods only."""
 
-    def __init__(self, env: BatchedAssemblyEnv, rng: np.random.Generator, level: str = "grasp",
+    def __init__(self, env: BatchedAssemblyEnv, rng: np.random.Generator, level: str = "final",
                  record: bool = False):
         if level not in LEVELS:
             raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
@@ -82,6 +84,7 @@ class AssemblyAPI:
         self.grip_open = bool(env.grip_cmd[0] > 0)
         self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
         self.perception = PERCEPTION                                    # "camera" | "oracle" (cameras + exact pose)
+        self.strict_stages = STRICT_STAGES
         self._perc, self._perc_cache, self._views_cache, self._perc_err = None, None, None, []
         if self.perception in ("camera", "oracle"):
             from perception import PartPerceiver
@@ -181,22 +184,25 @@ class AssemblyAPI:
         )
 
     def camera(self):
-        """The two cameras at this control step: dict(global=..., wrist=...), each dict(rgb [H,W,3] uint8,
+        """The cameras at this control step: dict(global=..., global2=..., wrist=...), each dict(rgb [H,W,3] uint8,
         depth [H,W] metres along the optical axis, mask [H,W] bool = the part's instance mask (a segmentation
-        model's output), K 3x3 intrinsics, cam_pos [3], cam_R [3,3] camera-to-world). `global` is fixed over the
-        board, `wrist` rides on the hand looking along the fingers. A pixel (u,v) with depth d is at
-        cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world. 320x240, no noise."""
+        model's output), K 3x3 intrinsics, cam_pos [3], cam_R [3,3] camera-to-world). `global` and `global2` are
+        fixed over the board (front-right and front-left), `wrist` rides on the hand looking along the fingers. A
+        pixel (u,v) with depth d is at cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world.
+        Resolution {RES}; no sensor noise."""
         self._require("camera")
         if self._perc is None:
             raise RuntimeError("camera() needs CAP_PERCEPTION=camera")
         return {n: dict(v) for n, v in self._views().items()}
 
     def locate_part(self):
-        """Pose of the part from the two cameras (depth + mask -> points, ICP on the part's CAD model, tracked
-        from step to step): (pos [3], quat [4], conf) with conf = dict(n_points seen, rms_mm fit residual,
-        stale = steps since the part was last seen, views = points per camera). pos/quat are None until the part
-        has been seen once; while it is hidden the last estimate is returned (stale > 0). A few mm / degrees
-        off when the part is far from the wrist camera or mostly hidden; symmetric parts have an arbitrary roll."""
+        """Pose of the part estimated from the cameras: FoundationPose (RGB-D + mask + the part's CAD mesh) run on
+        the camera that currently sees the part best and tracked from step to step. Returns (pos [3], quat [4],
+        conf) with conf = dict(n_points = part pixels in that camera, rms_mm = None, stale = steps since the
+        estimate was last refreshed, views = part pixels per camera, cam = the camera used). pos/quat are None
+        until the part has been seen once; while it is hidden the last estimate is returned (stale > 0). It is an
+        estimate: a few mm / degrees off at best, worse when the part is small in the image or mostly hidden;
+        symmetric parts have an arbitrary roll."""
         self._require("locate_part")
         pp, pq, conf = self._part_pose()
         if not np.isfinite(pp).all():
@@ -309,23 +315,13 @@ class AssemblyAPI:
         for _ in range(max(1, int(seconds / self.env.ecfg.control_dt))):
             self._step(a)
 
-    # ------------------------------------------------------------------ grasp
-    def grasp_candidates(self, part_pos, part_quat, n=32):
-        """n antipodal grasp candidates for the part at the pose YOU pass (e.g. from locate_part()).
-
-        Each is dict(pos, quat, half_width): the world TCP pose at which closing the gripper
-        grasps the part, and the part's half-width along the closing axis. Candidates are
-        unfiltered -- some are unreachable, collide with the board, or are poor for what
-        follows. Sampling is i.i.d.; call again for more.
-        """
-        self._require("grasp_candidates")
-        pp, pq = np.asarray(part_pos, float).reshape(3), np.asarray(part_quat, float).reshape(4)
-        Rp = quat_to_mat(pq)
-        out = []
-        for _ in range(n):
-            gp, gq, half = any_grasp(self.task.part_asset, self.rng)
-            out.append(dict(pos=pp + Rp @ gp, quat=quat_mul(pq, gq), half_width=float(half)))
-        return out
+    # ------------------------------------------------------------------ part model
+    def part_model(self):
+        """The part's CAD mesh in the part frame (the frame locate_part() and goal_* refer to): dict(vertices [N,3]
+        metres, faces [M,3] vertex indices, bbox_min [3], bbox_max [3]). Same every episode."""
+        self._require("part_model")
+        v, f = load_obj(self.task.part_asset)
+        return dict(vertices=v.copy(), faces=f.copy(), bbox_min=v.min(0), bbox_max=v.max(0))
 
     # ------------------------------------------------------------------ internals
     def _joint_err(self, q_target):
@@ -351,7 +347,7 @@ class AssemblyAPI:
 
 
 # ---------------------------------------------------------------------- prompt spec
-def spec(level="grasp"):
+def spec(level="final"):
     """The API documentation a policy is given, rendered from _LEVEL_OF so it cannot drift."""
     allowed = [n for n, lv in _LEVEL_OF.items() if LEVELS.index(lv) <= LEVELS.index(level)]
     lines = [f"API level {level!r}. You may call ONLY these methods on `api`:", ""]
@@ -360,6 +356,9 @@ def spec(level="grasp"):
         doc = " ".join((fn.__doc__ or "").split())
         if name == "observe" and "locate_part" not in allowed:
             doc = doc.replace(" or the tracker built on them (locate_part())", "")
+        if name == "camera":
+            from perception import W, H, WW, WH
+            doc = doc.replace("{RES}", f"global/global2 {W}x{H}, wrist {WW}x{WH}")
         if PERCEPTION == "oracle" and name == "locate_part":
             doc = ("Exact pose of the part: (pos [3], quat [4], conf), pos/quat taken from the simulator (oracle ablation, "
                    "not a camera estimate); conf = dict(n_points seen by the cameras, rms_mm, stale, views) as the tracker "
@@ -392,7 +391,7 @@ def sample_starts(task_name, family, n, seed=0):
     return states
 
 
-def run_episode(env, state, policy, level="grasp", seed=0, record=False):
+def run_episode(env, state, policy, level="final", seed=0, record=False):
     """Run `policy(api)` on one start state. Returns the outcome and the primitive trace."""
     env.set_states([0], np.asarray(state)[None, :], task_ids=[0])
     api = AssemblyAPI(env, np.random.default_rng(seed), level=level, record=record)
