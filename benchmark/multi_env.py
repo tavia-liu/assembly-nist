@@ -1,7 +1,7 @@
 """Simulator for several parts on the board at once, with the single-env BatchedAssemblyEnv interface.
 
 All parts are physical all the time. One part is *active*: the observation (part_p / part_q), the assembly
-distance and the success flag refer to it, so the cap API, the RL skill and the policies work unchanged; code
+distance and the success flag refer to it, so the API and the policies work unchanged; code
 switches the active part with set_active(). The clock runs over the whole board (horizon_s = the full budget).
 """
 from __future__ import annotations
