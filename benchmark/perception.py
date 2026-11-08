@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import threading
 import xml.etree.ElementTree as ET
 from multiprocessing.connection import Client
 
@@ -32,6 +33,7 @@ W, H = (int(v) for v in os.environ.get("CAP_CAM_RES", "1280x960").split("x"))   
 WW, WH = (int(v) for v in os.environ.get("CAP_WRIST_RES", "640x480").split("x"))         # wrist camera
 FPOSE_PORT = int(os.environ.get("FPOSE_PORT", "8130"))
 _RENDERERS = {}        # model hash -> (model, data, renderer): one EGL context per model per process
+_RENDER_LOCK = threading.Lock()   # the EGL contexts are shared by every episode of the process: render one at a time
 
 
 def add_cameras(xml: str) -> str:
@@ -146,10 +148,11 @@ class FPoseTracker:
 class PartPerceiver:
     def __init__(self, xml: str, part_body: str = "part", part_mesh: str = "", w=W, h=H, seed=0):
         key = hashlib.sha1(xml.encode()).hexdigest()
-        if key not in _RENDERERS:
-            m = mujoco.MjModel.from_xml_string(add_cameras(xml))
-            _RENDERERS[key] = (m, mujoco.MjData(m), {"global": mujoco.Renderer(m, h, w), "global2": mujoco.Renderer(m, h, w),
-                                                     "wrist": mujoco.Renderer(m, WH, WW)})
+        with _RENDER_LOCK:
+            if key not in _RENDERERS:
+                m = mujoco.MjModel.from_xml_string(add_cameras(xml))
+                _RENDERERS[key] = (m, mujoco.MjData(m), {"global": mujoco.Renderer(m, h, w), "global2": mujoco.Renderer(m, h, w),
+                                                         "wrist": mujoco.Renderer(m, WH, WW)})
         self.m, self.d, self.rs = _RENDERERS[key]
         self.cams = {n: mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_CAMERA, n) for n in ("global", "global2", "wrist")}
         self.body = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_BODY, part_body)
@@ -173,9 +176,10 @@ class PartPerceiver:
     def capture(self, state):
         """The three cameras at this physics state. depth in metres (z along the optical axis); the camera frame has
         x right, y up, z backwards (MuJoCo): world = cam_pos + cam_R @ [(u+.5-cx)/f*d, -(v+.5-cy)/f*d, -d]."""
-        mujoco.mj_setState(self.m, self.d, state, STATE_SPEC)
-        mujoco.mj_forward(self.m, self.d)
-        return {n: self._view(n, c) for n, c in self.cams.items()}
+        with _RENDER_LOCK:
+            mujoco.mj_setState(self.m, self.d, state, STATE_SPEC)
+            mujoco.mj_forward(self.m, self.d)
+            return {n: self._view(n, c) for n, c in self.cams.items()}
 
     @staticmethod
     def points(view, mask=None):

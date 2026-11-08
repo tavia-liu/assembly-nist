@@ -3,8 +3,8 @@
 Protocol. The part lies loose on the board at a random settled pose, the robot is at its home configuration with
 the gripper open (reset family `board`); the policy has --horizon seconds (default 40) to assemble it. Success:
 both of the part's keypoints within 1 mm of their goal, for whichever of the part's mesh symmetries fits best (a
-rod seated either way up counts). Starts come from the simulator's reset generator seeded by --seed: seed 1000
-(the default) is the held-out set; develop on other seeds. Every episode is rendered to an mp4. The policy file
+rod seated either way up counts). Start k comes from the simulator's reset generator with seed --seed + k: seeds
+1000.. are the held-out set; develop on other seeds. Every episode is rendered to an mp4. The policy file
 is checked before it runs: it may use the public methods of `api` only (no `api.env`, no private attributes, no
 simulator imports).
 Reported: success rate, completion time of the successful episodes, timeouts, safety stops, policy errors.
@@ -60,8 +60,9 @@ def load_policy(path: Path):
 
 
 def starts(task, n=N_EVAL, seed=EVAL_SEED):
-    """n `board` start states of the task, deterministic in seed."""
-    return api.sample_starts(task, START_FAMILY, n, seed=seed)
+    """n `board` start states of the task: start k is the first state of generator seed `seed + k` (the same
+    definition the cell server uses, so local and remote evaluation score the same starts)."""
+    return np.stack([api.sample_starts(task, START_FAMILY, 1, seed=seed + k)[0] for k in range(n)])
 
 
 class Video:
