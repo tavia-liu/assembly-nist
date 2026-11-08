@@ -1,4 +1,4 @@
-"""Evaluate a symmetric pixel PPO checkpoint (cap/train_pixel.py) on the near eval bank and render the first episodes.
+"""Evaluate a symmetric pixel PPO checkpoint (cap/train_pixel.py or cap/train_resnet.py) on the near eval bank and render the first episodes.
 
   PYTHONPATH=.:cap MUJOCO_GL=egl python cap/eval_pixel.py --ckpt runs/peg_4mm_pixel_near/model_001000.pt --task P4 [--deterministic]
 -> <run>/eval_<ckpt>[_det].json and <run>/videos/<ckpt>_rollouts[_det].mp4 (first --video starts, global | wrist)
@@ -39,7 +39,12 @@ def main():
     d = torch.load(a.ckpt, map_location="cpu", weights_only=False)
     args = d["args"]; res = args.get("pix_res", 96)
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = PixelActorCritic(res=res, max_std=args.get("max_std", 2.0), min_std=args.get("min_std", 1e-3)).to(dev)
+    if args.get("arch") == "resnet":
+        from resnet_nets import ResNetActorCritic
+        model = ResNetActorCritic(res=res, freeze=args.get("freeze_backbone", False), pretrained=False,
+                                  max_std=args.get("max_std", 2.0), min_std=args.get("min_std", 1e-3)).to(dev)
+    else:
+        model = PixelActorCritic(res=res, max_std=args.get("max_std", 2.0), min_std=args.get("min_std", 1e-3)).to(dev)
     model.load_state_dict(d["model"]); model.eval()
     cfg = env_config(args, a.nthread); cfg.horizon_s = a.horizon
     z = np.load(Path(a.bank_dir) / f"{a.task}_eval.npz")
