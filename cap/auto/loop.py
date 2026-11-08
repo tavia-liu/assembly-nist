@@ -282,8 +282,7 @@ class Loop:
         const = api.AssemblyAPI(env, np.random.default_rng(0), level=a.level).constants()
         (run / "BRIEF.md").write_text(P.BRIEF.format(
             task=a.task, horizon=a.horizon, schedule=" -> ".join(map(str, schedule)), last=schedule[-1],
-            rounds=a.rounds, spec=api.spec(a.level), const=json.dumps(const), max_exp=a.max_experiments,
-            sensing=P.SENSING[api.PERCEPTION]))
+            rounds=a.rounds, spec=api.spec(a.level), const=json.dumps(const), max_exp=a.max_experiments))
 
     def save(self, **kw):
         self.st.update(kw)

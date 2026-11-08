@@ -1,14 +1,5 @@
 """Every piece of wording the loop sends to the coder and to the auditor."""
 
-SENSING = {
-    "camera": "The robot has two cameras (a fixed one over the board and one on the wrist) and no other knowledge of "
-              "where the part is: use api.camera() and write your own vision, or api.locate_part(), the tracker built "
-              "on them.",
-    "oracle": "This is the ORACLE ablation: api.observe() returns the part's exact pose (part_pos, part_quat) at every "
-              "step, and api.locate_part() returns the same exact pose. The two cameras (api.camera(), a fixed one over "
-              "the board and one on the wrist) are still there for anything else you want to see.",
-}
-
 BRIEF = """\
 # Task
 
@@ -17,8 +8,10 @@ and bring it to its target pose on the fixture, in a physics simulator. An episo
 reaches the target pose (both keypoints within 1 mm), TIMEOUT after {horizon:g} s, SAFETY if a joint exceeds its
 velocity limit, or ERROR on an exception in your code.
 
-Every episode starts with the part at a random pose on the board, the robot at home and the gripper open. {sensing}
-You are scored on held-out starts you never see, by success rate and completion time. Write one program that decides from the API; never
+Every episode starts with the part at a random pose on the board, the robot at home and the gripper open. The robot
+has two cameras (a fixed one over the board and one on the wrist) and no other knowledge of where the part is: use
+api.camera() and write your own vision, or api.locate_part(), the tracker built on them. You are scored on held-out
+starts you never see, by success rate and completion time. Write one program that decides from the API; never
 special-case a start or hard-code numbers read off one trace.
 
 # How this loop works

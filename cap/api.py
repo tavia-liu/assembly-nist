@@ -96,7 +96,7 @@ class AssemblyAPI:
         """(pos, quat) of the part as the policy may know it: the camera estimate, or the simulator's in oracle mode."""
         s = self.env.state[0]
         true_p, true_q = s[self.env.sp[:3]].copy(), s[self.env.sp[3:7]].copy()
-        if self._perc is None or self.perception == "oracle":
+        if self._perc is None:
             return true_p, true_q, None
         if self._perc_cache is None or self._perc_cache[0] != int(self.env.t[0]):
             approach = self.tm.fk.forward(self.env.state[:1, self.env.sq])["tcp_R"][0][:, 2]
@@ -106,6 +106,8 @@ class AssemblyAPI:
             else:
                 self._perc_err.append(float(np.linalg.norm(pos - true_p)))
             self._perc_cache = (int(self.env.t[0]), pos, quat, conf)
+        if self.perception == "oracle":                                 # ablation: the tracker's confidence, the exact pose
+            return true_p, true_q, dict(self._perc_cache[3])
         return self._perc_cache[1].copy(), self._perc_cache[2].copy(), dict(self._perc_cache[3])
 
     def _views(self):
@@ -163,7 +165,7 @@ class AssemblyAPI:
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
         J = self._jacobian()
         tau_ext, wrench = self._external_load(J)
-        oracle = {} if self.perception == "camera" else dict(part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy())
+        oracle = {} if self._perc is not None else dict(part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy())
         return dict(
             t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2),
             time_left=round(float(self.env.horizon - self.env.t[0]) * self.env.ecfg.control_dt, 2),
@@ -186,7 +188,7 @@ class AssemblyAPI:
         cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world. 320x240, no noise."""
         self._require("camera")
         if self._perc is None:
-            raise RuntimeError("camera() needs CAP_PERCEPTION=camera or oracle")
+            raise RuntimeError("camera() needs CAP_PERCEPTION=camera")
         return {n: dict(v) for n, v in self._views().items()}
 
     def locate_part(self):
@@ -356,23 +358,13 @@ def spec(level="grasp"):
     for name in allowed:
         fn = getattr(AssemblyAPI, name)
         doc = " ".join((fn.__doc__ or "").split())
-        if PERCEPTION == "oracle":
-            doc = {"observe": doc.replace("The part is NOT in here: it is seen only through the cameras (camera()) or the "
-                                          "tracker built on them (locate_part()).",
-                                          "ORACLE mode: part_pos [3] and part_quat [4] are the simulator's exact part pose."),
-                   "locate_part": "ORACLE mode: (pos [3], quat [4], None), the simulator's exact part pose (the same as "
-                                  "observe()['part_pos'/'part_quat']); no tracker is involved."}.get(name, doc)
         import inspect
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]
         lines.append(f"  api.{name}{sig}\n      {doc}")
-    pose = ("The part's pose is never given: see it through camera() (write your own vision on the images) or "
-            "locate_part() (the provided tracker)." if PERCEPTION != "oracle" else
-            "ORACLE MODE (ablation): observe() also returns part_pos [3] and part_quat [4], the simulator's exact pose of "
-            "the part frame (the frame the CAD model and the keypoints are defined in), and locate_part() returns that "
-            "same exact pose with conf=None. camera() still works (images you may use for anything else).")
     lines += ["", "Calling anything else raises LevelError. There is no insert/align/reorient/screw "
-                  "primitive; the assembly strategy is yours to compute. " + pose,
+                  "primitive; the assembly strategy is yours to compute. The part's pose is never given: see it "
+                  "through camera() (write your own vision on the images) or locate_part() (the provided tracker).",
               "`api.EpisodeOver` is raised as soon as the episode ends -- let it propagate."]
     return "\n".join(lines)
 
