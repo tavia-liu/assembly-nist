@@ -358,6 +358,8 @@ def spec(level="grasp"):
     for name in allowed:
         fn = getattr(AssemblyAPI, name)
         doc = " ".join((fn.__doc__ or "").split())
+        if name == "observe" and "locate_part" not in allowed:
+            doc = doc.replace(" or the tracker built on them (locate_part())", "")
         if PERCEPTION == "oracle" and name == "locate_part":
             doc = ("Exact pose of the part: (pos [3], quat [4], conf), pos/quat taken from the simulator (oracle ablation, "
                    "not a camera estimate); conf = dict(n_points seen by the cameras, rms_mm, stale, views) as the tracker "
