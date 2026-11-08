@@ -1,19 +1,19 @@
 """The NIST task-board benchmark with several parts physically on the board at once (cap/multi_env.py).
 
 All parts of --tasks lie at random settled board poses (non-overlapping), the robot starts at home with the
-gripper open, and a cap policy assembles them one after another in one continuous episode: code picks the next
-part (--order greedy = nearest to the hand), the per-part policy (default: the code+RL hybrid) does the rest.
+gripper open, and a policy assembles them one after another in one continuous episode in a random order (--order
+given: the order of --tasks). The policy file's policy(api) assembles each part; its optional recover(api) runs first
+for every part after the first (the hand is wherever the previous part left it) and finish(api) after a success.
 The whole board has --per-part-s x n_parts seconds. Scored at the end: parts seated (assembly distance < 1 mm)
 and total time; per-part stage outcomes are logged too.
 
 Output per seed: <out>/seedNN.json and <out>/seedNN.mp4 (first --video-seeds seeds); <out>/summary.json.
 
-  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/multi_board.py --tasks R8+P12+Gm+USB+N8 --n-seeds 10 --video-seeds 2
+  PYTHONPATH=.:cap MUJOCO_GL=egl python cap/multi_board.py --tasks board20 --policy my_policy.py --n-seeds 10
 """
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import math
 import time
@@ -27,10 +27,9 @@ from PIL import Image, ImageDraw, ImageFont
 import api
 from assembly_policy.sim.env import STATE_SPEC, EnvConfig
 from assembly_policy.sim.tasks import resolve_tasks
-from assembly_policy.viz.demo import NAMES
-from eval_protocol import CAP_BANK_DIR
+from assembly_policy.viz.demo import NAMES, _separated, fixture_footprints, part_footprint
+from eval_protocol import load_module
 from multi_env import MultiPartEnv
-from multi_part import choose_layout
 from multi_scene import build_multi_xml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +37,28 @@ FPS = 25
 PRESETS = {"board5": "R8+P12+Gm+USB+N8",
            "board10": "R8+R16+P8+P16+Gm+N8+N16+BNC+USB+WP",
            "board20": "all20"}
+
+
+def choose_layout(tasks, sp, rng, margin=0.006, pool_n=16):
+    """One settled board start per part (api.sample_starts, reset family `board`, seeded from rng) such that no part
+    touches another part or any fixture."""
+    fixtures = fixture_footprints()
+    chosen, polys = {}, []
+    for t in rng.permutation(tasks):
+        t = str(t)
+        pool = api.sample_starts(t, "board", pool_n, seed=int(rng.integers(2**31 - 1)))
+        for m in (margin, margin / 2, 0.0):
+            for S in pool:
+                poly = part_footprint(t, S[sp[:3]], S[sp[3:7]])
+                if all(_separated(poly, f, m) for f in fixtures) and all(_separated(poly, q, m) for q in polys):
+                    chosen[t] = S.copy(); polys.append(poly)
+                    break
+            if t in chosen:
+                break
+        if t not in chosen:
+            chosen[t] = pool[0].copy(); polys.append(part_footprint(t, pool[0][sp[:3]], pool[0][sp[3:7]]))
+            print(f"[layout] {t}: no overlap-free start found", flush=True)
+    return chosen
 
 
 def render(tasks, frames, stages, out, width=1280, height=720, banner_s=3.0):
@@ -93,18 +114,14 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
     rng = np.random.default_rng(seed)
     env = MultiPartEnv(tasks, EnvConfig(nthread=1, horizon_s=a.per_part_s * len(tasks)))
     dt = env.ecfg.control_dt
-    layout = choose_layout(tasks, a.bank_dir, sp_single, rng)
+    layout = choose_layout(tasks, sp_single, rng)
     env.reset_board(layout, sp_single)
     frames, stages, results = [env.state[0].copy()], [], []
     remaining, t_wall = list(tasks), time.time()
     random_order = list(rng.permutation(tasks))
     timed_out = False
     for i in range(len(tasks)):
-        if a.order == "greedy":                       # code decides: the part nearest to the hand
-            tcp = env.tcp_pos()
-            t = min(remaining, key=lambda u: np.linalg.norm(env.part_pos(u)[:2] - tcp[:2]))
-        else:
-            t = next(u for u in random_order if u in remaining)
+        t = str(random_order[i]) if a.order == "random" else tasks[i]
         remaining.remove(t)
         env.set_active(t)
         t0 = int(env.t[0])
@@ -112,7 +129,7 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
         while True:                                   # a safety stop (velocity limit) ends the attempt, not the part
             ap = api.AssemblyAPI(env, rng, level="final", record=True)
             try:
-                if i > 0 or tries > 0:
+                if (i > 0 or tries > 0) and hasattr(policy_mod, "recover"):
                     policy_mod.recover(ap)
                 policy_mod.policy(ap)
             except api.EpisodeOver:
@@ -163,7 +180,7 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
                total_s=round(int(env.t[0]) * dt, 2), wall_s=round(time.time() - t_wall, 1))
     (out / f"seed{seed:02d}.json").write_text(json.dumps(res, indent=1))
     print(f"seed {seed}: {res['n_seated']}/{res['n']} seated at the end, {res['total_s']} s  [{res['wall_s']} s wall]", flush=True)
-    if seed - a.seed < a.video_seeds:
+    if a.video_seeds < 0 or seed - a.seed < a.video_seeds:
         n = render(tasks, frames, stages, str(out / f"seed{seed:02d}.mp4"), a.width, a.height)
         print(f"wrote {out / f'seed{seed:02d}.mp4'} ({n} frames)", flush=True)
     env.close()
@@ -173,25 +190,24 @@ def run_seed(seed, tasks, policy_mod, a, out, sp_single):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tasks", default="board5", help="task list, or board5 / board10 / board20 (= all20)")
-    ap.add_argument("--policy", default="hybrid_rl", help="module in cap/ with policy(api) and recover(api)")
-    ap.add_argument("--order", default="greedy", choices=["greedy", "random"])
+    ap.add_argument("--policy", required=True, help="a policy.py with policy(api) and, optionally, recover(api) / finish(api)")
+    ap.add_argument("--order", default="random", choices=["random", "given"])
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-seeds", type=int, default=1)
-    ap.add_argument("--video-seeds", type=int, default=1)
+    ap.add_argument("--video-seeds", type=int, default=-1, help="seeds rendered to mp4 (default: all)")
     ap.add_argument("--per-part-s", type=float, default=40.0)
     ap.add_argument("--retries", type=int, default=2, help="extra attempts on a part after a safety stop")
-    ap.add_argument("--bank-dir", default=str(CAP_BANK_DIR))
     ap.add_argument("--width", type=int, default=1280); ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--tag", default="", help="suffix of the default output folder")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     tasks = resolve_tasks(PRESETS.get(a.tasks, a.tasks))
-    out = Path(a.out or ROOT / "cap/runs/rl/board_greedy" / f"{a.policy}_{a.order}_{'+'.join(tasks)}{a.tag}")
+    out = Path(a.out or ROOT / "runs/board" / f"{Path(a.policy).stem}_{a.order}_{'+'.join(tasks)}{a.tag}")
     out.mkdir(parents=True, exist_ok=True)
-    policy_mod = importlib.import_module(a.policy)
+    policy_mod = load_module(Path(a.policy))
     e1 = api.make_env(tasks[0]); sp_single = e1.sp.copy(); e1.close()
     allres = [run_seed(s, tasks, policy_mod, a, out, sp_single) for s in range(a.seed, a.seed + a.n_seeds)]
-    summ = dict(tasks=tasks, policy=a.policy, order=a.order, per_part_s=a.per_part_s, n_seeds=len(allres),
+    summ = dict(tasks=tasks, policy=str(a.policy), order=a.order, per_part_s=a.per_part_s, n_seeds=len(allres),
                 all_seated_rate=round(100 * np.mean([r["all_seated"] for r in allres]), 1),
                 seated_mean=round(float(np.mean([r["n_seated"] for r in allres])), 2),
                 per_task_seated={t: round(100 * np.mean([r["final"][t]["ok"] for r in allres]), 1) for t in tasks},

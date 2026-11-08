@@ -33,8 +33,6 @@ from assembly_policy.sim.robot import mat_to_quat, quat_mul, quat_to_mat, solve_
 from assembly_policy.sim.scene import build_xml
 from assembly_policy.sim.tasks import MESH_DIR, TASKS, load_obj, scene_pose
 
-# "camera": part pose from the two-camera tracker (cap/perception.py); "oracle": the simulator's pose (ablation)
-PERCEPTION = os.environ.get("CAP_PERCEPTION", "camera")
 # held-out evaluation sets this False: a stage verifier's FAIL is recorded but does not stop the policy
 STRICT_STAGES = True
 
@@ -83,38 +81,30 @@ class AssemblyAPI:
         # servo step would re-open the fingers and drop the part
         self.grip_open = bool(env.grip_cmd[0] > 0)
         self._a7 = 1.0 if self.grip_open else -1.0      # what the kin primitives send on action[7]
-        self.perception = PERCEPTION                                    # "camera" | "oracle" (cameras + exact pose)
         self.strict_stages = STRICT_STAGES
-        self._perc, self._perc_cache, self._views_cache, self._perc_err = None, None, None, []
-        if self.perception in ("camera", "oracle"):
-            from perception import PartPerceiver
-            if hasattr(env, "tasks"):                                   # multi-part board (cap/multi_env.py)
-                from multi_scene import build_multi_xml
-                xml, body = build_multi_xml(env.tasks, visual=True), f"part_{self.task.name}"
-            else:
-                xml, body = build_xml(self.task.name, visual=True), "part"
-            self._perc = PartPerceiver(xml, body, self.task.part_asset)
+        # the cameras and the pose tracker on them: the only way the part reaches a policy
+        from perception import PartPerceiver
+        if hasattr(env, "tasks"):                                       # multi-part board (cap/multi_env.py)
+            from multi_scene import build_multi_xml
+            xml, body = build_multi_xml(env.tasks, visual=True), f"part_{self.task.name}"
+        else:
+            xml, body = build_xml(self.task.name, visual=True), "part"
+        self._perc = PartPerceiver(xml, body, self.task.part_asset)
+        self._perc_cache, self._views_cache = None, None
 
     def _part_pose(self):
-        """(pos, quat) of the part as the policy may know it: the camera estimate, or the simulator's in oracle mode."""
-        s = self.env.state[0]
-        true_p, true_q = s[self.env.sp[:3]].copy(), s[self.env.sp[3:7]].copy()
-        if self._perc is None:
-            return true_p, true_q, None
+        """(pos, quat, conf) of the part as the policy may know it: the camera tracker's estimate (NaN until the
+        part has been seen once). The simulator's part pose is never read here."""
         if self._perc_cache is None or self._perc_cache[0] != int(self.env.t[0]):
             approach = self.tm.fk.forward(self.env.state[:1, self.env.sq])["tcp_R"][0][:, 2]
-            pos, quat, conf = self._perc.estimate(s, self._views(), approach=approach)
+            pos, quat, conf = self._perc.estimate(self.env.state[0], self._views(), approach=approach)
             if pos is None:                                             # never seen: no pose
                 pos, quat = np.full(3, np.nan), np.full(4, np.nan)
-            else:
-                self._perc_err.append(float(np.linalg.norm(pos - true_p)))
             self._perc_cache = (int(self.env.t[0]), pos, quat, conf)
-        if self.perception == "oracle":                                 # ablation: the tracker's confidence, the exact pose
-            return true_p, true_q, dict(self._perc_cache[3])
         return self._perc_cache[1].copy(), self._perc_cache[2].copy(), dict(self._perc_cache[3])
 
     def _views(self):
-        """The two camera images at this control step (rendered once per step)."""
+        """The three camera views at this control step (rendered once per step)."""
         if self._views_cache is None or self._views_cache[0] != int(self.env.t[0]):
             self._views_cache = (int(self.env.t[0]), self._perc.capture(self.env.state[0]))
         return self._views_cache[1]
@@ -168,12 +158,10 @@ class AssemblyAPI:
         fk = self.tm.fk.forward(self.env.state[:, self.env.sq])
         J = self._jacobian()
         tau_ext, wrench = self._external_load(J)
-        oracle = {} if self._perc is not None else dict(part_pos=s[self.env.sp[:3]].copy(), part_quat=s[self.env.sp[3:7]].copy())
         return dict(
             t=round(float(self.env.t[0]) * self.env.ecfg.control_dt, 2),
             time_left=round(float(self.env.horizon - self.env.t[0]) * self.env.ecfg.control_dt, 2),
             tcp_pos=fk["tcp_p"][0].copy(), tcp_quat=mat_to_quat(fk["tcp_R"][:1])[0],
-            **oracle,
             goal_pos=self._goal_pos.copy(), goal_quat=self._goal_quat.copy(),
             joints=s[self.env.sq].copy(), joint_vel=s[self.env.sqd].copy(),
             gripper_width=float(s[self.env.sf].sum()),
@@ -191,8 +179,6 @@ class AssemblyAPI:
         pixel (u,v) with depth d is at cam_pos + cam_R @ [(u+.5-cx)/fx*d, -(v+.5-cy)/fy*d, -d] in the world.
         Resolution {RES}; no sensor noise."""
         self._require("camera")
-        if self._perc is None:
-            raise RuntimeError("camera() needs CAP_PERCEPTION=camera")
         return {n: dict(v) for n, v in self._views().items()}
 
     def locate_part(self):
@@ -337,11 +323,7 @@ class AssemblyAPI:
             self.done = True
             self.outcome = dict(success=bool(info["success"][0]), safety=bool(info["safety"][0]),
                                 timeout=bool(info["timeout"][0]), d_asm=float(info["d_asm"][0]),
-                                steps=int(self.env.t[0]), perception=self.perception,
-                                perception_err_mm=(dict(mean=round(1000 * float(np.mean(self._perc_err)), 2),
-                                                        p90=round(1000 * float(np.percentile(self._perc_err, 90)), 2),
-                                                        max=round(1000 * float(np.max(self._perc_err)), 2), n=len(self._perc_err))
-                                                   if self._perc_err else None))
+                                steps=int(self.env.t[0]))
             raise EpisodeOver()
         return self.observe()
 
@@ -359,10 +341,6 @@ def spec(level="final"):
         if name == "camera":
             from perception import W, H, WW, WH
             doc = doc.replace("{RES}", f"global/global2 {W}x{H}, wrist {WW}x{WH}")
-        if PERCEPTION == "oracle" and name == "locate_part":
-            doc = ("Exact pose of the part: (pos [3], quat [4], conf), pos/quat taken from the simulator (oracle ablation, "
-                   "not a camera estimate); conf = dict(n_points seen by the cameras, rms_mm, stale, views) as the tracker "
-                   "would report it.")
         import inspect
         sig = str(inspect.signature(fn)).replace("(self, ", "(").replace("(self)", "()")
         sig = sig.split(" -> ")[0]

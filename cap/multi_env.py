@@ -137,9 +137,6 @@ class MultiPartEnv(BatchedAssemblyEnv):
         return {t: dict(d_asm=float(self.assembly_distance(t)[0]),
                         ok=bool(self.assembly_distance(t)[0] < self.ecfg.success_threshold)) for t in self.tasks}
 
-    def part_pos(self, t):
-        return self.state[0, self.part_slices(t)[0][:3]].copy()
-
     def tcp_pos(self):
         return self.models[0].fk.forward(self.state[:, self.sq])["tcp_p"][0].copy()
 

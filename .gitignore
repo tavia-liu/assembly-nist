@@ -12,3 +12,5 @@ MUJOCO_LOG.TXT
 .venv/
 data/
 runs/
+*.log
+cap/runs/
