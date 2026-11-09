@@ -7,7 +7,8 @@ One connection per client session (multiprocessing.connection, pickle). Requests
   start(task, seed, horizon, family)         -> ep        one part; family = board (loose on the board, default) | loose |
                                                          pickup | inhand | partial | near (the reset families of the simulator)
   board(seed, tasks, per_part_s)             -> ep, parts all parts physically on the board, one continuous episode
-  select(ep, part) | free(ep)                            board: make `part` the active (scored) one / unscored motion
+  select(ep, part) | free(ep)                            board: make `part` the active (scored) one (the arm stays
+                                                         where the previous part left it) / unscored motion
   call(ep, method, args, kwargs)             -> result, or episode_over + outcome
   outcome(ep) | close(ep)
   save_video(ep, name)                                   evaluation sessions only: renders the episode to <out>/<name>.mp4
@@ -79,6 +80,7 @@ class Board:
             e1 = api.make_env(tasks[0]); sp = e1.sp.copy(); e1.close()
             self.env.reset_board(choose_layout(tasks, sp, self.rng), sp)
         self.api, self.frames, self.marks = None, [self.env.state[0].copy()], []
+        self.first = True
 
     def _flush(self):
         if self.api is not None and self.record:
@@ -88,6 +90,9 @@ class Board:
         if part not in self.tasks:
             raise ValueError(f"unknown part {part!r}; parts: {self.tasks}")
         self._flush()
+        # one continuous task: the arm starts at home for the first part only and goes on from wherever the previous part
+        # left it (the policy's recover(api) runs before each later part)
+        self.first = False
         self.env.scoring = True
         self.env.set_active(part)
         with _BUILD:

@@ -75,8 +75,10 @@ def board(a, robot, pol, token, name):
             order = [str(p) for p in rng.permutation(b.parts)]
             stages, err = [], None
             for i, part in enumerate(order):
-                ap = b.select(part)       # the arm is back at home with the gripper open
+                ap = b.select(part)       # the arm goes on from where the previous part left it
                 try:
+                    if i > 0 and hasattr(pol, "recover"):
+                        pol.recover(ap)
                     pol.policy(ap)
                 except robot.EpisodeOver:
                     pass

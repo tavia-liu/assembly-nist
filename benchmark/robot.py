@@ -11,8 +11,8 @@
 
     b = robot.board(seed=0)                    # all 20 parts on the board, 240 s per part, scored at the end
     for part in b.parts:
-        api = b.select(part)                   # the part now being scored
-        ...
+        api = b.select(part)                   # the part now being scored; one continuous task: the arm goes on
+        ...                                    # from where the previous part left it (start at home only once)
     free = b.free()                            # unscored motion (release, lift) between parts
     print(b.outcome())                         # seated per part, time
 
