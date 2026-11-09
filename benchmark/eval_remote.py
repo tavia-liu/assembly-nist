@@ -111,7 +111,7 @@ def main():
     ap.add_argument("--sandbox", required=True)
     ap.add_argument("--task", default="R8"); ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--board", action="store_true"); ap.add_argument("--tasks", default="board20"); ap.add_argument("--seeds", type=int, default=10)
-    ap.add_argument("--horizon", type=float, default=40.0)
+    ap.add_argument("--horizon", type=float, default=240.0)
     ap.add_argument("--out", required=True, help="where eval.json goes (videos: server --out/<name>/)")
     ap.add_argument("--name", default=None)
     a = ap.parse_args()
