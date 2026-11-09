@@ -3,8 +3,9 @@
   SERVER_TOKEN=... PYTHONPATH=.:benchmark python benchmark/eval_remote.py --sandbox <dir> --task R8 --n 100 --out <dir>
   SERVER_TOKEN=... PYTHONPATH=.:benchmark python benchmark/eval_remote.py --sandbox <dir> --board --seeds 10 --out <dir>
 
-policy.py defines policy(api); for the board also, optionally, recover(api) (run before every part after the first)
-and finish(api) (run after a success, unscored). Held-out starts are seeds RESERVED.. (reserved on the server).
+policy.py defines policy(api); for the board also, optionally, finish(api) (run after a success, unscored). Every
+board part starts with the arm at home and the gripper open, as in the single-part protocol, so no recover(api) is
+needed. Held-out starts are seeds RESERVED.. (reserved on the server).
 Videos are rendered by the server into its --out under <name>/.
 """
 from __future__ import annotations
@@ -67,17 +68,15 @@ def single(a, robot, pol, token, name):
 
 def board(a, robot, pol, token, name):
     res = []
-    for s in range(a.seeds):
+    for s in range(a.seed0, a.seed0 + a.seeds):
         seed = RESERVED + s
         rng = np.random.default_rng(seed)
         with robot.board(seed=seed, tasks=a.tasks, per_part_s=a.horizon, token=token) as b:
             order = [str(p) for p in rng.permutation(b.parts)]
             stages, err = [], None
             for i, part in enumerate(order):
-                ap = b.select(part)
+                ap = b.select(part)       # the arm is back at home with the gripper open
                 try:
-                    if i > 0 and hasattr(pol, "recover"):
-                        pol.recover(ap)
                     pol.policy(ap)
                 except robot.EpisodeOver:
                     pass
@@ -110,7 +109,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sandbox", required=True)
     ap.add_argument("--task", default="R8"); ap.add_argument("--n", type=int, default=100)
-    ap.add_argument("--board", action="store_true"); ap.add_argument("--tasks", default="board20"); ap.add_argument("--seeds", type=int, default=10)
+    ap.add_argument("--board", action="store_true"); ap.add_argument("--tasks", default="board20"); ap.add_argument("--seeds", type=int, default=10); ap.add_argument("--seed0", type=int, default=0, help="first held-out board index (to split boards across processes)")
     ap.add_argument("--horizon", type=float, default=240.0)
     ap.add_argument("--out", required=True, help="where eval.json goes (videos: server --out/<name>/)")
     ap.add_argument("--name", default=None)
