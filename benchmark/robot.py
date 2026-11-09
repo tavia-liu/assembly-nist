@@ -3,6 +3,8 @@
     import robot
     print(robot.spec())                        # the methods of `api`
     api = robot.start("R8", seed=0)            # one part lying on the board; 40 s
+    api = robot.start("R8", seed=0, family="near")   # other start families: loose, pickup (part in the open gripper),
+                                               # inhand (held, lifted), partial (partly inserted), near (held above the hole)
     pos, quat, conf = api.locate_part()
     ...                                        # api.EpisodeOver is raised when the episode ends
     print(api.outcome())                       # success / safety / timeout / steps
@@ -139,9 +141,9 @@ def tasks() -> list:
         c.close()
 
 
-def start(task, seed=0, horizon=40.0, token=None) -> Episode:
+def start(task, seed=0, horizon=40.0, family="board", token=None) -> Episode:
     c = _Conn()
-    r = c.rpc(cmd="start", task=task, seed=int(seed), horizon=float(horizon), token=token or os.environ.get("ROBOT_TOKEN"))
+    r = c.rpc(cmd="start", task=task, seed=int(seed), horizon=float(horizon), family=family, token=token or os.environ.get("ROBOT_TOKEN"))
     return Episode(c, r["ep"])
 
 

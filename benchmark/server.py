@@ -4,7 +4,8 @@
 
 One connection per client session (multiprocessing.connection, pickle). Requests are dicts with `cmd`:
   spec | methods | tasks
-  start(task, seed, horizon)                 -> ep        one part loose on the board, the robot at home
+  start(task, seed, horizon, family)         -> ep        one part; family = board (loose on the board, default) | loose |
+                                                         pickup | inhand | partial | near (the reset families of the simulator)
   board(seed, tasks, per_part_s)             -> ep, parts all parts physically on the board, one continuous episode
   select(ep, part) | free(ep)                            board: make `part` the active (scored) one / unscored motion
   call(ep, method, args, kwargs)             -> result, or episode_over + outcome
@@ -29,6 +30,7 @@ import api
 import eval_protocol
 from perception import on_render_thread
 from assembly_policy.sim.env import EnvConfig
+from assembly_policy.sim.resets import FAMILIES
 from assembly_policy.sim.tasks import TASKS, resolve_tasks
 from multi_board import PRESETS, choose_layout, render as render_board
 from multi_env import MultiPartEnv
@@ -47,10 +49,12 @@ def public(o):
 
 
 class Single:
-    def __init__(self, task, seed, horizon, record):
+    def __init__(self, task, seed, horizon, record, family="board"):
+        if family not in FAMILIES:
+            raise ValueError(f"unknown start family {family!r}; one of {FAMILIES}")
         with _BUILD:
             self.env = api.make_env(task, horizon_s=horizon)
-            s0 = api.sample_starts(task, "board", 1, seed=seed)[0]
+            s0 = api.sample_starts(task, family, 1, seed=seed)[0]
             self.env.set_states([0], s0[None], task_ids=[0])
             self.api = api.AssemblyAPI(self.env, np.random.default_rng(seed), record=record)
         self.task, self.record = task, record
@@ -138,7 +142,7 @@ class Session(threading.Thread):
             ep = f"ep{self.n}"
             try:
                 if cmd == "start":
-                    self.eps[ep] = Single(str(r["task"]), seed, float(r.get("horizon", 40.0)), priv)
+                    self.eps[ep] = Single(str(r["task"]), seed, float(r.get("horizon", 40.0)), priv, str(r.get("family", "board")))
                     return dict(ep=ep)
                 tasks = resolve_tasks(PRESETS.get(r.get("tasks", "board20"), r.get("tasks", "board20")))
                 self.eps[ep] = Board(seed, tasks, float(r.get("per_part_s", 40.0)), priv)
@@ -188,7 +192,7 @@ class Session(threading.Thread):
                     if not isinstance(ex, (PermissionError, ValueError, AttributeError, RuntimeError, KeyError)):
                         self.log(traceback.format_exc()[-800:])
                 if r.get("cmd") in ("start", "board", "close", "save_video"):
-                    self.log(f"{r['cmd']} {r.get('task', r.get('tasks', ''))} seed={r.get('seed', '')} {time.perf_counter() - t0:.1f}s")
+                    self.log(f"{r['cmd']} {r.get('task', r.get('tasks', ''))} {r.get('family', '')} seed={r.get('seed', '')} {time.perf_counter() - t0:.1f}s")
         finally:
             for e in self.eps.values():
                 try:
