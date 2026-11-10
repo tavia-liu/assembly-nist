@@ -121,12 +121,10 @@ class Trainer:
         self._children = []                                             # background evaluations
         self.ecfg = EnvConfig(nthread=a.nthread, cost_coef=a.cost_coef, action_scale_joints=parse_scales(a.action_scale_joints))
         self.args = dict(vars(a), env={k: v for k, v in dataclasses.asdict(self.ecfg).items() if k != "nthread"})
-        # bookkeeping of the training units (one transition = one env x one 25 Hz control step)
-        self.args["derived"] = dict(
-            rollout_transitions=a.envs * a.steps, minibatch_size=a.envs * a.steps // a.minibatches,
-            updates_per_iteration=a.epochs * a.minibatches, total_transitions_planned=a.iters * a.envs * a.steps,
-            episode_max_steps=int(round(self.ecfg.horizon_s / self.ecfg.control_dt)), control_hz=int(round(1 / self.ecfg.control_dt)),
-            proprio_dim=HISTORY * PROPRIO_DIM, proprio_history=HISTORY, action_dim=8, action_space="joint position delta + gripper")
+        self.args["derived"] = dict(rollout_transitions=a.envs * a.steps, minibatch_size=a.envs * a.steps // a.minibatches,
+                                    updates_per_iteration=a.epochs * a.minibatches,
+                                    total_transitions_planned=a.iters * a.envs * a.steps,
+                                    episode_max_steps=int(round(self.ecfg.horizon_s / self.ecfg.control_dt)))
         (self.run / "config.json").write_text(json.dumps(self.args, indent=1))
         self.wb = None                                                  # Weights & Biases when WANDB_PROJECT is set
         if os.environ.get("WANDB_PROJECT"):

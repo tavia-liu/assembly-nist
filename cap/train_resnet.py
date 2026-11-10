@@ -13,7 +13,6 @@ Differences from train_pixel.py:
 """
 from __future__ import annotations
 
-import json
 import sys
 
 import torch
@@ -55,16 +54,8 @@ class ResNetTrainer(T.Trainer):
         nb = sum(p.numel() for p in self.model.encoder.trunk.parameters())
         print(f"[train_resnet] {n / 1e6:.2f}M parameters, backbone {nb / 1e6:.2f}M ({'frozen' if a.freeze_backbone else f'lr x{a.backbone_lr_mult}'}), "
               f"aug pad {a.aug_pad}, {a.pix_res}x{a.pix_res} x 2 cameras", flush=True)
-        self.args["encoder"] = dict(
-            image_res=a.pix_res, cameras=["global", "wrist"], cameras_share_weights=True,
-            encoder="torchvision resnet18 conv1..layer3, ImageNet init, BatchNorm frozen",
-            encoder_trainable="none (frozen)" if a.freeze_backbone else f"conv weights at lr x{a.backbone_lr_mult}",
-            pooling="spatial softmax (256 keypoints) + channel mean", latent_dim=128, shared_actor_critic_encoder=True,
-            heads="Linear 256 -> 2 residual blocks (256/1024) -> LN -> Linear", params_total=n, params_backbone=nb,
-            aug=f"random shift pad {a.aug_pad} requested; NOT applied (gated on model.training, False during collection)")
-        (self.run / "config.json").write_text(json.dumps(self.args, indent=1))
         if self.wb is not None:
-            self.wb.config.update({"encoder": self.args["encoder"], "derived": self.args["derived"]}, allow_val_change=True)
+            self.wb.config.update({"derived": self.args["derived"]}, allow_val_change=True)
         self._swapped = True
         self._maybe_resume()
 
