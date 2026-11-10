@@ -12,3 +12,4 @@ MUJOCO_LOG.TXT
 .venv/
 data/
 runs/
+cap/clean/autoloop/
