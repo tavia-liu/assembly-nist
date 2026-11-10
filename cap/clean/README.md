@@ -13,9 +13,7 @@ autoloop/rod_8mm_oracle, board_loop/ and rl/ (RL skill = sim point-cloud checkpo
 | run | task | API level / inputs | held-out |
 |---|---|---|---|
 | rod_8mm_final | R8 | final: camera(mask,depth) + part_model (CAD) + locate_part (FoundationPose) | 28/100 (eval_r25.json) |
-| rod_8mm_kin   | R8 | kin: camera(mask,depth) + proprio only, no CAD, no tracker | 12/100 (eval_r25.json) |
-| rod_8mm_auto  | R8 | grasp (11-07 API): camera + locate_part + grasp_candidates(policy pose) | 13/100 (eval_r24.json) |
 | rod_16mm_auto | R16 | grasp (11-07 API) | no held-out (25 rounds, debug best 2/5) |
 
-Short names (R8_auto, P4_auto, ...) are symlinks. The old paths under cap/runs/autoloop/ are forwarding symlinks.
+Short names (R16_auto, ...) are symlinks. The old paths under cap/runs/autoloop/ are forwarding symlinks.
 Camera-only RL (symmetric pixel / ResNet PPO, actor and critic on images) lives in runs/peg_4mm_{pixel,resnet}_near, not here.
