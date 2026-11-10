@@ -129,6 +129,8 @@ class Trainer:
                                  name=os.environ.get("WANDB_RUN_NAME", self.run.name), config=self.args,
                                  dir=str(self.run), id=os.environ.get("WANDB_RUN_ID", self.run.name.replace("/", "-")),
                                  resume="allow")
+            self.wb.define_metric("transitions")                     # default x-axis: environment steps, not iterations
+            self.wb.define_metric("*", step_metric="transitions")
         self._maybe_resume()
         horizon = int(round(self.ecfg.horizon_s / self.ecfg.control_dt))
         t0 = np.random.default_rng(a.seed + 7).integers(0, horizon, a.envs)   # desynchronized episode clocks
